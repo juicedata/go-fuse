@@ -284,6 +284,9 @@ type MountOptions struct {
 	// directory queries (i.e. 'ls' without '-l') can be faster with
 	// ReadDir, as no per-file stat calls are needed
 	DisableReadDirPlus bool
+
+	// EnableWriteback enables kernel writeback cache.
+	EnableWriteback bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.

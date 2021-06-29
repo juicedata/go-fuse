@@ -122,6 +122,10 @@ func doInit(server *Server, req *request) {
 		server.kernelSettings.Flags &= ^uint32(CAP_READDIRPLUS)
 	}
 
+	if server.opts.EnableWriteback {
+		server.kernelSettings.Flags |= CAP_WRITEBACK_CACHE
+	}
+
 	dataCacheMode := input.Flags & CAP_AUTO_INVAL_DATA
 	if server.opts.ExplicitDataCacheControl {
 		// we don't want CAP_AUTO_INVAL_DATA even if we cannot go into fully explicit mode
