@@ -23,8 +23,11 @@ import (
 )
 
 const (
-	// The kernel caps writes at 128k.
-	MAX_KERNEL_WRITE = 128 * 1024
+	// Linux v4.20+ caps requests at 1 MiB. Older kernels at 128 kiB.
+	MAX_KERNEL_WRITE = 1024 * 1024
+
+	// defaultMaxWrite is the default value for MountOptions.MaxWrite
+	defaultMaxWrite = 128 * 1024 // 128 kiB
 
 	minMaxReaders = 1
 	maxMaxReaders = 4
@@ -157,7 +160,7 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		o.MaxWrite = 0
 	}
 	if o.MaxWrite == 0 {
-		o.MaxWrite = 1 << 16
+		o.MaxWrite = defaultMaxWrite
 	}
 	if o.MaxWrite > MAX_KERNEL_WRITE {
 		o.MaxWrite = MAX_KERNEL_WRITE
@@ -309,13 +312,13 @@ func (o *MountOptions) optionsStrings() []string {
 	if o.AllowOther {
 		r = append(r, "allow_other")
 	}
-
 	if o.FsName != "" {
 		r = append(r, "fsname="+o.FsName)
 	}
 	if o.Name != "" {
 		r = append(r, "subtype="+o.Name)
 	}
+	r = append(r, fmt.Sprintf("max_read=%d", o.MaxWrite))
 
 	return r
 }
