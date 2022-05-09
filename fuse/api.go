@@ -74,7 +74,7 @@
 // see https://github.com/hanwen/go-fuse/issues/261 for an example of that
 // problem.
 //
-// Higher level interfaces
+// # Higher level interfaces
 //
 // As said above this packages provides way to implement filesystems in terms of
 // raw FUSE protocol. Additionally packages nodefs and pathfs provide ways to

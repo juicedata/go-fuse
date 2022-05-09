@@ -212,12 +212,13 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
+	ms.mountPoint = mountPoint
+
 	fd, err := mount(mountPoint, &o, ms.ready)
 	if err != nil {
+		log.Printf("mount: %s", err)
 		return nil, err
 	}
-
-	ms.mountPoint = mountPoint
 	ms.mountFd = fd
 
 	if code := ms.handleInit(); !code.Ok() {
@@ -283,9 +284,6 @@ func handleEINTR(fn func() error) (err error) {
 // Returns a new request, or error. In case exitIdle is given, returns
 // nil, OK if we have too many readers already.
 func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
-	req = ms.reqPool.Get().(*request)
-	dest := ms.readPool.Get().([]byte)
-
 	ms.reqMu.Lock()
 	if ms.reqReaders > ms.maxReaders {
 		ms.reqMu.Unlock()
@@ -293,6 +291,8 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	}
 	ms.reqReaders++
 	ms.reqMu.Unlock()
+
+	dest := ms.readPool.Get().([]byte)
 
 	var n int
 	err := handleEINTR(func() error {
@@ -302,32 +302,32 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	})
 	if err != nil {
 		code = ToStatus(err)
-		ms.reqPool.Put(req)
+		ms.readPool.Put(dest)
 		ms.reqMu.Lock()
 		ms.reqReaders--
 		ms.reqMu.Unlock()
 		return nil, code
 	}
 
+	req = ms.reqPool.Get().(*request)
 	if ms.latencies != nil {
 		req.startTime = time.Now()
 	}
 	gobbled := req.setInput(dest[:n])
+	if !gobbled {
+		ms.readPool.Put(dest)
+	}
 
 	ms.reqMu.Lock()
 	defer ms.reqMu.Unlock()
+	ms.reqReaders--
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
 		return nil, status
 	}
 	req.inflightIndex = len(ms.reqInflight)
 	ms.reqInflight = append(ms.reqInflight, req)
-	if !gobbled {
-		ms.readPool.Put(dest)
-		dest = nil
-	}
-	ms.reqReaders--
-	if !ms.singleReader && ms.reqReaders <= 0 {
+	if !ms.singleReader && ms.reqReaders <= 1 {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
@@ -367,7 +367,13 @@ func (ms *Server) returnRequest(req *request) {
 		req.bufferPoolInputBuf = nil
 		ms.readPool.Put(p)
 	}
-	ms.reqPool.Put(req)
+	select {
+	case <-req.cancel:
+		// canceled
+		log.Printf("request is canceled")
+	default:
+		ms.reqPool.Put(req)
+	}
 }
 
 func (ms *Server) recordStats(req *request) {
@@ -387,10 +393,6 @@ func (ms *Server) Serve() {
 	ms.loop(false)
 	ms.loops.Wait()
 
-	ms.writeMu.Lock()
-	syscall.Close(ms.mountFd)
-	ms.writeMu.Unlock()
-
 	// shutdown in-flight cache retrieves.
 	//
 	// It is possible that umount comes in the middle - after retrieve
@@ -407,6 +409,10 @@ func (ms *Server) Serve() {
 		reading.st = ENODEV
 		close(reading.ready)
 	}
+
+	ms.writeMu.Lock()
+	syscall.Close(ms.mountFd)
+	ms.writeMu.Unlock()
 }
 
 // Wait waits for the serve loop to exit. This should only be called
@@ -502,7 +508,6 @@ func (ms *Server) handleRequest(req *request) Status {
 			log.Printf("writer: Write/Writev failed, err: %v. opcode: %v",
 				errNo, operationName(req.inHeader.Opcode))
 		}
-
 	}
 	ms.returnRequest(req)
 	return Status(errNo)

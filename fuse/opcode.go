@@ -464,6 +464,10 @@ func doIoctl(server *Server, req *request) {
 	req.status = server.fileSystem.Ioctl(req.cancel, in, out, req.arg, req.flatData)
 }
 
+func doPoll(server *Server, req *request) {
+	req.status = ENOSYS
+}
+
 func doDestroy(server *Server, req *request) {
 	req.status = OK
 }
@@ -499,18 +503,21 @@ func doCopyFileRange(server *Server, req *request) {
 
 func doInterrupt(server *Server, req *request) {
 	input := (*InterruptIn)(req.inData)
-	server.reqMu.Lock()
-	defer server.reqMu.Unlock()
 
 	// This is slow, but this operation is rare.
+	server.reqMu.Lock()
 	for _, inflight := range server.reqInflight {
-		if input.Unique == inflight.inHeader.Unique && !inflight.interrupted {
-			close(inflight.cancel)
-			inflight.interrupted = true
+		if input.Unique == inflight.inHeader.Unique {
+			if !inflight.interrupted {
+				close(inflight.cancel)
+				inflight.interrupted = true
+			}
+			server.reqMu.Unlock()
 			req.status = OK
 			return
 		}
 	}
+	server.reqMu.Unlock()
 
 	// not found; wait for a bit
 	time.Sleep(10 * time.Microsecond)
@@ -731,6 +738,7 @@ func init() {
 		_OP_RENAME:          doRename,
 		_OP_STATFS:          doStatFs,
 		_OP_IOCTL:           doIoctl,
+		_OP_POLL:            doPoll,
 		_OP_DESTROY:         doDestroy,
 		_OP_NOTIFY_REPLY:    doNotifyReply,
 		_OP_FALLOCATE:       doFallocate,
@@ -787,6 +795,7 @@ func init() {
 		_OP_SETATTR:         func(ptr unsafe.Pointer) interface{} { return (*SetAttrIn)(ptr) },
 		_OP_INIT:            func(ptr unsafe.Pointer) interface{} { return (*InitIn)(ptr) },
 		_OP_IOCTL:           func(ptr unsafe.Pointer) interface{} { return (*IoctlIn)(ptr) },
+		_OP_POLL:            func(ptr unsafe.Pointer) interface{} { return (*_PollIn)(ptr) },
 		_OP_OPEN:            func(ptr unsafe.Pointer) interface{} { return (*OpenIn)(ptr) },
 		_OP_MKNOD:           func(ptr unsafe.Pointer) interface{} { return (*MknodIn)(ptr) },
 		_OP_CREATE:          func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },

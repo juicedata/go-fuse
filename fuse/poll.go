@@ -28,6 +28,16 @@ func doPollHackLookup(ms *Server, req *request) {
 			Fh: pollHackInode,
 		}
 		req.status = OK
+	case _OP_CREATE:
+		out := (*CreateOut)(req.outData())
+		out.EntryOut = EntryOut{
+			NodeId: pollHackInode,
+			Attr:   attr,
+		}
+		out.OpenOut = OpenOut{
+			Fh: pollHackInode,
+		}
+		req.status = OK
 	case _OP_GETATTR, _OP_SETATTR:
 		out := (*AttrOut)(req.outData())
 		out.Attr = attr
@@ -37,7 +47,6 @@ func doPollHackLookup(ms *Server, req *request) {
 		req.status = ENODATA
 	case _OP_POLL:
 		req.status = ENOSYS
-
 	case _OP_ACCESS, _OP_FLUSH, _OP_RELEASE:
 		// Avoid upsetting the OSX mount process.
 		req.status = OK
