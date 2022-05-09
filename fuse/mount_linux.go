@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -27,6 +28,27 @@ func unixgramSocketpair() (l, r *os.File, err error) {
 	return
 }
 
+func updateMtab(source, mnt, _type, options string) {
+	mtabPath := "/etc/mtab"
+	if strings.HasPrefix(mtabPath, mnt) {
+		return
+	}
+	st, err := os.Lstat(mtabPath)
+	if err != nil || st.IsDir() {
+		return
+	}
+	cmd := exec.Cmd{
+		Path: "/bin/mount",
+		Args: []string{
+			"/bin/mount", "--no-canonicalize", "-i", "-f", "-t", "fuse." + _type, "-o", options, source, mnt,
+		},
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		println("update /etc/mtab: ", string(out))
+	}
+}
+
 // Create a FUSE FS on the specified mount point without using
 // fusermount.
 func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd int, err error) {
@@ -41,7 +63,7 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 		source = opts.Name
 	}
 
-	var flags uintptr
+	var flags uintptr = opts.DirectMountFlags
 	flags |= syscall.MS_NOSUID | syscall.MS_NODEV
 
 	// some values we need to pass to mount, but override possible since opts.Options comes after
@@ -51,16 +73,24 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 		"user_id=0",
 		"group_id=0",
 	}
-	r = append(r, opts.Options...)
+	for _, o := range opts.Options {
+		if o != "nonempty" && o != "allow_root" {
+			r = append(r, o)
+		}
+	}
 
 	if opts.AllowOther {
 		r = append(r, "allow_other")
 	}
-
-	err = syscall.Mount(opts.FsName, mountPoint, "fuse."+opts.Name, opts.DirectMountFlags, strings.Join(r, ","))
+	err = syscall.Mount(source, mountPoint, "fuse."+opts.Name, flags, strings.Join(r, ","))
 	if err != nil {
 		syscall.Close(fd)
 		return
+	}
+
+	if os.Geteuid() == 0 {
+		realmnt, _ := filepath.Abs(mountPoint)
+		updateMtab(source, realmnt, opts.Name, strings.Join(r, ","))
 	}
 
 	// success
