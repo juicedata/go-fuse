@@ -67,12 +67,6 @@
 // Typically, each call of the API happens in its own
 // goroutine, so take care to make the file system thread-safe.
 //
-// Be careful when you access the FUSE mount from the same process. An access can
-// tie up two OS threads (one on the request side and one on the FUSE server side).
-// This can deadlock if there is no free thread to handle the FUSE server side.
-// Run your program with GOMAXPROCS=1 to make the problem easier to reproduce,
-// see https://github.com/hanwen/go-fuse/issues/261 for an example of that
-// problem.
 //
 // Higher level interfaces
 //
@@ -161,9 +155,15 @@ type MountOptions struct {
 	// you must implement the GetLk/SetLk/SetLkw methods.
 	EnableLocks bool
 
+	// if set, ask kernel to forward ACL requests.
+	EnableAcl bool
+
 	// If set, ask kernel not to do automatic data cache invalidation.
 	// The filesystem is fully responsible for invalidating data cache.
 	ExplicitDataCacheControl bool
+
+	// If set, ask kernel to flush pages in background
+	Writeback bool
 
 	// If set, fuse will first attempt to use syscall.Mount instead of
 	// fusermount to mount the filesystem. This will not update /etc/mtab
@@ -173,13 +173,6 @@ type MountOptions struct {
 	// Options passed to syscall.Mount, the default value used by fusermount
 	// is syscall.MS_NOSUID|syscall.MS_NODEV
 	DirectMountFlags uintptr
-
-	// EnableAcls enables kernel ACL support.
-	//
-	// See the comments to FUSE_CAP_POSIX_ACL
-	// in https://github.com/libfuse/libfuse/blob/master/include/fuse_common.h
-	// for details.
-	EnableAcl bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.

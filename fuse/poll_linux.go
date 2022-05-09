@@ -8,7 +8,7 @@ import (
 )
 
 func pollHack(mountPoint string) error {
-	fd, err := syscall.Open(filepath.Join(mountPoint, pollHackName), syscall.O_RDONLY, 0)
+	fd, err := syscall.Creat(filepath.Join(mountPoint, pollHackName), syscall.O_CREAT)
 	if err != nil {
 		return err
 	}

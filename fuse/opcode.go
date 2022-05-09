@@ -89,7 +89,7 @@ func doInit(server *Server, req *request) {
 	server.reqMu.Lock()
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
-		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS)
+		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS | CAP_EXPORT_SUPPORT)
 
 	if server.opts.EnableLocks {
 		server.kernelSettings.Flags |= CAP_FLOCK_LOCKS | CAP_POSIX_LOCKS
@@ -97,6 +97,10 @@ func doInit(server *Server, req *request) {
 
 	if server.opts.EnableAcl {
 		server.kernelSettings.Flags |= CAP_POSIX_ACL
+	}
+
+	if server.opts.Writeback {
+		server.kernelSettings.Flags |= CAP_WRITEBACK_CACHE
 	}
 
 	dataCacheMode := input.Flags & CAP_AUTO_INVAL_DATA
@@ -318,7 +322,7 @@ func doBatchForget(server *Server, req *request) {
 	forgets := *(*[]_ForgetOne)(unsafe.Pointer(h))
 	for i, f := range forgets {
 		if server.opts.Debug {
-			log.Printf("doBatchForget: rx %d %d/%d: FORGET n%d {Nlookup=%d}",
+			log.Printf("doBatchForget: rx %d %d/%d: FORGET i%d {Nlookup=%d}",
 				req.inHeader.Unique, i+1, len(forgets), f.NodeId, f.Nlookup)
 		}
 		if f.NodeId == pollHackInode {
@@ -396,11 +400,19 @@ func doFsyncDir(server *Server, req *request) {
 }
 
 func doSetXAttr(server *Server, req *request) {
+	if server.opts.DisableXAttrs {
+		req.status = ENOSYS
+		return
+	}
 	splits := bytes.SplitN(req.arg, []byte{0}, 2)
 	req.status = server.fileSystem.SetXAttr(req.cancel, (*SetXAttrIn)(req.inData), string(splits[0]), splits[1])
 }
 
 func doRemoveXAttr(server *Server, req *request) {
+	if server.opts.DisableXAttrs {
+		req.status = ENOSYS
+		return
+	}
 	req.status = server.fileSystem.RemoveXAttr(req.cancel, req.inHeader, req.filenames[0])
 }
 
@@ -441,6 +453,10 @@ func doIoctl(server *Server, req *request) {
 	req.status = ENOSYS
 }
 
+func doPoll(server *Server, req *request) {
+	req.status = ENOSYS
+}
+
 func doDestroy(server *Server, req *request) {
 	req.status = OK
 }
@@ -476,18 +492,21 @@ func doCopyFileRange(server *Server, req *request) {
 
 func doInterrupt(server *Server, req *request) {
 	input := (*InterruptIn)(req.inData)
-	server.reqMu.Lock()
-	defer server.reqMu.Unlock()
 
 	// This is slow, but this operation is rare.
+	server.reqMu.Lock()
 	for _, inflight := range server.reqInflight {
-		if input.Unique == inflight.inHeader.Unique && !inflight.interrupted {
-			close(inflight.cancel)
-			inflight.interrupted = true
+		if input.Unique == inflight.inHeader.Unique {
+			if !inflight.interrupted {
+				close(inflight.cancel)
+				inflight.interrupted = true
+			}
+			server.reqMu.Unlock()
 			req.status = OK
 			return
 		}
 	}
+	server.reqMu.Unlock()
 
 	// not found; wait for a bit
 	time.Sleep(10 * time.Microsecond)
@@ -708,6 +727,7 @@ func init() {
 		_OP_RENAME:          doRename,
 		_OP_STATFS:          doStatFs,
 		_OP_IOCTL:           doIoctl,
+		_OP_POLL:            doPoll,
 		_OP_DESTROY:         doDestroy,
 		_OP_NOTIFY_REPLY:    doNotifyReply,
 		_OP_FALLOCATE:       doFallocate,
@@ -755,6 +775,7 @@ func init() {
 		_OP_SETATTR:         func(ptr unsafe.Pointer) interface{} { return (*SetAttrIn)(ptr) },
 		_OP_INIT:            func(ptr unsafe.Pointer) interface{} { return (*InitIn)(ptr) },
 		_OP_IOCTL:           func(ptr unsafe.Pointer) interface{} { return (*_IoctlIn)(ptr) },
+		_OP_POLL:            func(ptr unsafe.Pointer) interface{} { return (*_PollIn)(ptr) },
 		_OP_OPEN:            func(ptr unsafe.Pointer) interface{} { return (*OpenIn)(ptr) },
 		_OP_MKNOD:           func(ptr unsafe.Pointer) interface{} { return (*MknodIn)(ptr) },
 		_OP_CREATE:          func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },
