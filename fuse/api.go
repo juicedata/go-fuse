@@ -154,6 +154,9 @@ type MountOptions struct {
 	// If set, print debugging information.
 	Debug bool
 
+	// If set, tell kernel not to apply umask for create/mkdir/mknod
+	DontUmask bool
+
 	// If set, ask kernel to forward file locks to FUSE. If using,
 	// you must implement the GetLk/SetLk/SetLkw methods.
 	EnableLocks bool
@@ -181,6 +184,9 @@ type MountOptions struct {
 	EnableWriteback bool
 
 	EnableIoctl bool
+
+	// Other capability flags
+	OtherCaps uint32
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
