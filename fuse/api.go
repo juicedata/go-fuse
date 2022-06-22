@@ -151,6 +151,9 @@ type MountOptions struct {
 	// If set, print debugging information.
 	Debug bool
 
+	// If set, tell kernel not to apply umask for create/mkdir/mknod
+	DontUmask bool
+
 	// If set, ask kernel to forward file locks to FUSE. If using,
 	// you must implement the GetLk/SetLk/SetLkw methods.
 	EnableLocks bool
@@ -173,6 +176,9 @@ type MountOptions struct {
 	// Options passed to syscall.Mount, the default value used by fusermount
 	// is syscall.MS_NOSUID|syscall.MS_NODEV
 	DirectMountFlags uintptr
+
+	// Other capability flags
+	OtherCaps uint32
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
