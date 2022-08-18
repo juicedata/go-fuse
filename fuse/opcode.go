@@ -450,7 +450,7 @@ func doStatFs(server *Server, req *request) {
 }
 
 func doIoctl(server *Server, req *request) {
-	req.status = ENOSYS
+	req.status = server.fileSystem.Ioctl(req.cancel, (*IoctlIn)(req.inData), (*IoctlOut)(req.outData()), &req.arg, &req.flatData)
 }
 
 func doDestroy(server *Server, req *request) {
@@ -583,7 +583,7 @@ func init() {
 		_OP_CREATE:          unsafe.Sizeof(CreateIn{}),
 		_OP_INTERRUPT:       unsafe.Sizeof(InterruptIn{}),
 		_OP_BMAP:            unsafe.Sizeof(_BmapIn{}),
-		_OP_IOCTL:           unsafe.Sizeof(_IoctlIn{}),
+		_OP_IOCTL:           unsafe.Sizeof(IoctlIn{}),
 		_OP_POLL:            unsafe.Sizeof(_PollIn{}),
 		_OP_NOTIFY_REPLY:    unsafe.Sizeof(NotifyRetrieveIn{}),
 		_OP_FALLOCATE:       unsafe.Sizeof(FallocateIn{}),
@@ -616,7 +616,7 @@ func init() {
 		_OP_GETLK:                 unsafe.Sizeof(LkOut{}),
 		_OP_CREATE:                unsafe.Sizeof(CreateOut{}),
 		_OP_BMAP:                  unsafe.Sizeof(_BmapOut{}),
-		_OP_IOCTL:                 unsafe.Sizeof(_IoctlOut{}),
+		_OP_IOCTL:                 unsafe.Sizeof(IoctlOut{}),
 		_OP_POLL:                  unsafe.Sizeof(_PollOut{}),
 		_OP_NOTIFY_INVAL_ENTRY:    unsafe.Sizeof(NotifyInvalEntryOut{}),
 		_OP_NOTIFY_INVAL_INODE:    unsafe.Sizeof(NotifyInvalInodeOut{}),
@@ -766,7 +766,7 @@ func init() {
 		_OP_LISTXATTR:       func(ptr unsafe.Pointer) interface{} { return (*GetXAttrIn)(ptr) },
 		_OP_SETATTR:         func(ptr unsafe.Pointer) interface{} { return (*SetAttrIn)(ptr) },
 		_OP_INIT:            func(ptr unsafe.Pointer) interface{} { return (*InitIn)(ptr) },
-		_OP_IOCTL:           func(ptr unsafe.Pointer) interface{} { return (*_IoctlIn)(ptr) },
+		_OP_IOCTL:           func(ptr unsafe.Pointer) interface{} { return (*IoctlIn)(ptr) },
 		_OP_OPEN:            func(ptr unsafe.Pointer) interface{} { return (*OpenIn)(ptr) },
 		_OP_MKNOD:           func(ptr unsafe.Pointer) interface{} { return (*MknodIn)(ptr) },
 		_OP_CREATE:          func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },

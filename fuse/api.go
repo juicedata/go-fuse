@@ -290,6 +290,8 @@ type RawFileSystem interface {
 	ReleaseDir(input *ReleaseIn)
 	FsyncDir(cancel <-chan struct{}, input *FsyncIn) (code Status)
 
+	Ioctl(cancel <-chan struct{}, in *IoctlIn, out *IoctlOut, inBuf, outBuf *[]byte) Status
+
 	StatFs(cancel <-chan struct{}, input *InHeader, out *StatfsOut) (code Status)
 
 	// This is called on processing the first request. The
