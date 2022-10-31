@@ -392,6 +392,9 @@ func doRead(server *Server, req *request) {
 		if rs, ok := req.readResult.(withSlice); ok {
 			req.slices, st = rs.Slices()
 		} else {
+			if server.opts.NoAllocForRead {
+				buf = server.allocOut(req, in.Size)
+			}
 			req.flatData, st = req.readResult.Bytes(buf)
 		}
 		req.status = Status(st)
