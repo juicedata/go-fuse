@@ -171,6 +171,9 @@ type MountOptions struct {
 	// If set, ask kernel to flush pages in background
 	Writeback bool
 
+	// don't alloc buffer for read operation
+	NoAllocForRead bool
+
 	// If set, fuse will first attempt to use syscall.Mount instead of
 	// fusermount to mount the filesystem. This will not update /etc/mtab
 	// but might be needed if fusermount is not available.
