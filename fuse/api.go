@@ -94,7 +94,7 @@ type ReadResult interface {
 	// Returns the raw bytes for the read, possibly using the
 	// passed buffer. The buffer should be larger than the return
 	// value from Size.
-	Bytes(buf []byte) ([]byte, Status)
+	Bytes(buf []byte) ([]byte, int)
 
 	// Size returns how many bytes this return value takes at most.
 	Size() int
