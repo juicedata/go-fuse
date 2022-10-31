@@ -371,7 +371,7 @@ func doLink(server *Server, req *request) {
 }
 
 type withSlice interface {
-	Slices() ([][]byte, Status)
+	Slices() ([][]byte, int)
 }
 
 func doRead(server *Server, req *request) {
@@ -386,11 +386,13 @@ func doRead(server *Server, req *request) {
 		req.fdData = fd
 		req.flatData = nil
 	} else if req.readResult != nil && req.status.Ok() {
+		var st int
 		if rs, ok := req.readResult.(withSlice); ok {
-			req.slices, req.status = rs.Slices()
+			req.slices, st = rs.Slices()
 		} else {
-			req.flatData, req.status = req.readResult.Bytes(buf)
+			req.flatData, st = req.readResult.Bytes(buf)
 		}
+		req.status = Status(st)
 	}
 }
 
