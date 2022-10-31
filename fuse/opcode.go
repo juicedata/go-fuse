@@ -372,16 +372,32 @@ func doLink(server *Server, req *request) {
 	req.status = server.fileSystem.Link(req.cancel, (*LinkIn)(req.inData), req.filenames[0], out)
 }
 
+type withSlice interface {
+	Slices() ([][]byte, int)
+}
+
 func doRead(server *Server, req *request) {
 	in := (*ReadIn)(req.inData)
-	buf := server.allocOut(req, in.Size)
+	var buf []byte
+	if !server.opts.NoAllocForRead {
+		buf = server.allocOut(req, in.Size)
+	}
 
 	req.readResult, req.status = server.fileSystem.Read(req.cancel, in, buf)
 	if fd, ok := req.readResult.(*readResultFd); ok {
 		req.fdData = fd
 		req.flatData = nil
 	} else if req.readResult != nil && req.status.Ok() {
-		req.flatData, req.status = req.readResult.Bytes(buf)
+		var st int
+		if rs, ok := req.readResult.(withSlice); ok {
+			req.slices, st = rs.Slices()
+		} else {
+			if server.opts.NoAllocForRead {
+				buf = server.allocOut(req, in.Size)
+			}
+			req.flatData, st = req.readResult.Bytes(buf)
+		}
+		req.status = Status(st)
 	}
 }
 

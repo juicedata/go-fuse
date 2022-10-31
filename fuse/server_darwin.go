@@ -20,11 +20,19 @@ func (ms *Server) systemWrite(req *request, header []byte) Status {
 	if req.fdData != nil {
 		sz := req.flatDataSize()
 		buf := ms.allocOut(req, uint32(sz))
-		req.flatData, req.status = req.fdData.Bytes(buf)
+		var st int
+		req.flatData, st = req.fdData.Bytes(buf)
+		req.status = Status(st)
 		header = req.serializeHeader(len(req.flatData))
 	}
 
-	_, err := writev(int(ms.mountFd), [][]byte{header, req.flatData})
+	bufs := [][]byte{header}
+	if req.slices != nil {
+		bufs = append(bufs, req.slices...)
+	} else {
+		bufs = append(bufs, req.flatData)
+	}
+	_, err := writev(int(ms.mountFd), bufs)
 	if req.readResult != nil {
 		req.readResult.Done()
 	}

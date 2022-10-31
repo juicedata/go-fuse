@@ -101,7 +101,7 @@ type ReadResult interface {
 	// Returns the raw bytes for the read, possibly using the
 	// passed buffer. The buffer should be larger than the return
 	// value from Size.
-	Bytes(buf []byte) ([]byte, Status)
+	Bytes(buf []byte) ([]byte, int)
 
 	// Size returns how many bytes this return value takes at most.
 	Size() int
@@ -195,6 +195,9 @@ type MountOptions struct {
 
 	// Other capability flags
 	OtherCaps uint32
+
+	// don't alloc buffer for read operation
+	NoAllocForRead bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.

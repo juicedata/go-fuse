@@ -22,8 +22,8 @@ func (r *readResultData) Size() int {
 func (r *readResultData) Done() {
 }
 
-func (r *readResultData) Bytes(buf []byte) ([]byte, Status) {
-	return r.Data, OK
+func (r *readResultData) Bytes(buf []byte) ([]byte, int) {
+	return r.Data, 0
 }
 
 func ReadResultData(b []byte) ReadResult {
@@ -49,7 +49,7 @@ type readResultFd struct {
 
 // Reads raw bytes from file descriptor if necessary, using the passed
 // buffer as storage.
-func (r *readResultFd) Bytes(buf []byte) ([]byte, Status) {
+func (r *readResultFd) Bytes(buf []byte) ([]byte, int) {
 	sz := r.Sz
 	if len(buf) < sz {
 		sz = len(buf)
@@ -64,7 +64,7 @@ func (r *readResultFd) Bytes(buf []byte) ([]byte, Status) {
 		n = 0
 	}
 
-	return buf[:n], ToStatus(err)
+	return buf[:n], int(ToStatus(err))
 }
 
 func (r *readResultFd) Size() int {

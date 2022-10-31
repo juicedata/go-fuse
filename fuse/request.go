@@ -37,6 +37,7 @@ type request struct {
 	status   Status
 	flatData []byte
 	fdData   *readResultFd
+	slices   [][]byte
 
 	// In case of read, keep read result here so we can call
 	// Done() on it.
@@ -72,6 +73,7 @@ func (r *request) clear() {
 	r.status = OK
 	r.flatData = nil
 	r.fdData = nil
+	r.slices = nil
 	r.startTime = time.Time{}
 	r.handler = nil
 	r.readResult = nil
@@ -128,6 +130,8 @@ func (r *request) OutputDebug() string {
 			spl := ""
 			if r.fdData != nil {
 				spl = " (fd data)"
+			} else if r.slices != nil {
+				spl = fmt.Sprintf(" (%d slices)", len(r.slices))
 			} else {
 				l := len(r.flatData)
 				s := ""
@@ -260,6 +264,13 @@ func (r *request) serializeHeader(flatDataSize int) (header []byte) {
 func (r *request) flatDataSize() int {
 	if r.fdData != nil {
 		return r.fdData.Size()
+	}
+	if r.slices != nil {
+		var total int
+		for _, s := range r.slices {
+			total += len(s)
+		}
+		return total
 	}
 	return len(r.flatData)
 }
