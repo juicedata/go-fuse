@@ -355,7 +355,8 @@ func (ms *Server) DebugData() string {
 }
 
 // What is a good number?  Maybe the number of CPUs?
-var _MAX_READERS = runtime.NumCPU()
+var _MAX_READERS = 4
+var _MIN_READERS = 1
 
 // handleEINTR retries the given function until it doesn't return syscall.EINTR.
 // This is similar to the HANDLE_EINTR() macro from Chromium ( see
@@ -425,7 +426,7 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	}
 	req.inflightIndex = len(ms.reqInflight)
 	ms.reqInflight = append(ms.reqInflight, req)
-	if !ms.singleReader && ms.reqReaders <= 1 && !ms.shutdown {
+	if !ms.singleReader && ms.reqReaders <= _MIN_READERS && !ms.shutdown {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
