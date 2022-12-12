@@ -31,8 +31,8 @@ const (
 	// defaultMaxWrite is the default value for MountOptions.MaxWrite
 	defaultMaxWrite = 128 * 1024 // 128 kiB
 
-	minMaxReaders = 2
-	maxMaxReaders = 16
+	minMaxReaders = 1
+	maxMaxReaders = 4
 )
 
 // Server contains the logic for reading from the FUSE device and
