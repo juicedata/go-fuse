@@ -739,7 +739,15 @@ func init() {
 		_OP_COPY_FILE_RANGE: doCopyFileRange,
 		_OP_LSEEK:           doLseek,
 	} {
-		operationHandlers[op].Func = v
+		operationHandlers[op].Func = func(s *Server, r *request) {
+			defer func() {
+				if e := recover(); e != nil {
+					r.status = EIO
+					log.Printf("raw filesystem recovered, io error: %v\n", e)
+				}
+			}()
+			v(s, r)
+		}
 	}
 
 	// Outputs.
