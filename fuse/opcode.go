@@ -10,6 +10,7 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"time"
 	"unsafe"
 )
@@ -743,7 +744,7 @@ func init() {
 			defer func() {
 				if e := recover(); e != nil {
 					r.status = EIO
-					log.Printf("raw filesystem recovered, io error: %v\n", e)
+					log.Printf("raw filesystem recovered, io error: %v\nstacktrace: \n%s", e, string(debug.Stack()))
 				}
 			}()
 			v(s, r)
