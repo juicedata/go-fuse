@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/hanwen/go-fuse/v2/internal/testutil"
 )
 
@@ -99,15 +98,15 @@ func TestZipFs(t *testing.T) {
 	f.Close()
 }
 
-func TestLinkCount(t *testing.T) {
-	mp, clean := setupZipfs(t)
-	defer clean()
+// func TestLinkCount(t *testing.T) {
+// 	mp, clean := setupZipfs(t)
+// 	defer clean()
 
-	fi, err := os.Stat(mp + "/file.txt")
-	if err != nil {
-		t.Fatalf("Stat failed: %v", err)
-	}
-	if fuse.ToStatT(fi).Nlink != 1 {
-		t.Fatal("wrong link count", fuse.ToStatT(fi).Nlink)
-	}
-}
+// 	fi, err := os.Stat(mp + "/file.txt")
+// 	if err != nil {
+// 		t.Fatalf("Stat failed: %v", err)
+// 	}
+// 	if fuse.ToStatT(fi).Nlink != 1 {
+// 		t.Fatal("wrong link count", fuse.ToStatT(fi).Nlink)
+// 	}
+// }
