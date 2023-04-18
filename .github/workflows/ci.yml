@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron:  '0 12 * * *' # Every day noon UTC
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        go:
+          - "1.15.x"
+          - "1.16.x"
+          - "1.17.x"
+          - "1.18.x"
+          - "1.19.x"
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Install Go ${{ matrix.go }}
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go }}
+    # CI platform specific setup steps happen here
+    - name: Install os dependencies
+      run: sudo apt-get install -qq fuse3 libssl-dev libfuse-dev
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0 # Make "git describe" work
+    - name: Build
+      run: go build ./...
+    # Actual test steps are in all.bash
+    - name: Test
+      run: go test -timeout 5m -p 1 -count 1 -v ./...
