@@ -7,7 +7,7 @@ on:
     - cron:  '0 12 * * *' # Every day noon UTC
 
 jobs:
-  build:
+  test:
     strategy:
       matrix:
         go:
