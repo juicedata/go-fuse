@@ -462,6 +462,9 @@ func doIoctl(server *Server, req *request) {
 		req.flatData = server.allocOut(req, in.OutSize)
 	}
 	req.status = server.fileSystem.Ioctl(req.cancel, in, out, req.arg, req.flatData)
+	if !req.status.Ok() {
+		req.flatData = req.flatData[:0]
+	}
 }
 
 func doDestroy(server *Server, req *request) {
