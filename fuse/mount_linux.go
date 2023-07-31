@@ -28,6 +28,10 @@ func unixgramSocketpair() (l, r *os.File, err error) {
 	return
 }
 
+func mtabNeedUpdate(mnt string) bool {
+	return true
+}
+
 func updateMtab(source, mnt, _type, options string) {
 	mtabPath := "/etc/mtab"
 	if strings.HasPrefix(mtabPath, mnt) {
@@ -90,7 +94,9 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 
 	if os.Geteuid() == 0 {
 		realmnt, _ := filepath.Abs(mountPoint)
-		updateMtab(source, realmnt, opts.Name, strings.Join(r, ","))
+		if mtabNeedUpdate(realmnt) {
+			updateMtab(source, realmnt, opts.Name, strings.Join(r, ","))
+		}
 	}
 
 	// success
