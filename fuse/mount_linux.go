@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func unixgramSocketpair() (l, r *os.File, err error) {
@@ -29,18 +31,21 @@ func unixgramSocketpair() (l, r *os.File, err error) {
 }
 
 func mtabNeedUpdate(mnt string) bool {
+	mtabPath := "/etc/mtab"
+	if strings.HasPrefix(mtabPath, mnt) {
+		return false
+	}
+	st, err := os.Lstat(mtabPath)
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	if unix.Access(mtabPath, unix.W_OK) != nil {
+		return false
+	}
 	return true
 }
 
 func updateMtab(source, mnt, _type, options string) {
-	mtabPath := "/etc/mtab"
-	if strings.HasPrefix(mtabPath, mnt) {
-		return
-	}
-	st, err := os.Lstat(mtabPath)
-	if err != nil || st.IsDir() {
-		return
-	}
 	cmd := exec.Cmd{
 		Path: "/bin/mount",
 		Args: []string{
