@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,6 +62,7 @@ type Server struct {
 	reqMu          sync.Mutex
 	reqReaders     int
 	reqInflight    []*request
+	recentUnique   []uint64
 	kernelSettings InitIn
 
 	// in-flight notify-retrieve queries
@@ -70,6 +73,7 @@ type Server struct {
 	singleReader bool
 	canSplice    bool
 	loops        sync.WaitGroup
+	shutdown     bool
 
 	ready chan error
 
@@ -212,24 +216,123 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
-	fd, err := mount(mountPoint, &o, ms.ready)
+	ms.mountPoint = mountPoint
+
+	err := ms.mount(&o)
 	if err != nil {
+		log.Printf("mount: %s", err)
 		return nil, err
 	}
+	// This prepares for Serve being called somewhere, either
+	// synchronously or asynchronously.
+	ms.loops.Add(1)
+	return ms, nil
+}
 
-	ms.mountPoint = mountPoint
+func (ms *Server) mount(opt *MountOptions) error {
+	path := os.Getenv("_FUSE_FD_COMM")
+	if path != "" {
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			return fmt.Errorf("dial %s: %s", path, err)
+		}
+		defer c.Close()
+
+		msg, fds, err := getFd(c.(*net.UnixConn), 2)
+		if err != nil {
+			return fmt.Errorf("get fd: %s", err)
+		}
+
+		if len(fds) > 0 {
+			// the first sone is not needed
+			syscall.Close(fds[0])
+		}
+		if len(fds) == 2 {
+			if len(msg) < int(unsafe.Sizeof(InitIn{})) {
+				return fmt.Errorf("short setting: %d < %d", len(msg), unsafe.Sizeof(InitIn{}))
+			}
+			close(ms.ready)
+			ms.kernelSettings = *(*InitIn)(unsafe.Pointer(&msg[0]))
+			if ms.kernelSettings.Minor >= 13 {
+				ms.setSplice()
+			}
+			// log.Println("setting %+v", ms.kernelSettings)
+			syscall.CloseOnExec(fds[1])
+			ms.mountFd = fds[1]
+			ms.fileSystem.Init(ms)
+			ms.recentUnique = make([]uint64, 0)
+			go ms.sendFd(path)
+			go ms.checkLostRequests()
+			return nil
+		}
+	}
+
+	fd, err := mount(ms.mountPoint, opt, ms.ready)
+	if err != nil {
+		return err
+	}
 	ms.mountFd = fd
 
 	if code := ms.handleInit(); !code.Ok() {
 		syscall.Close(fd)
 		// TODO - unmount as well?
-		return nil, fmt.Errorf("init: %s", code)
+		return fmt.Errorf("init: %s", code)
 	}
 
-	// This prepares for Serve being called somewhere, either
-	// synchronously or asynchronously.
-	ms.loops.Add(1)
-	return ms, nil
+	if path != "" {
+		go ms.sendFd(path)
+	}
+	return nil
+}
+
+func (ms *Server) sendFd(path string) {
+	buf := make([]byte, unsafe.Sizeof(InitIn{}))
+	*(*InitIn)(unsafe.Pointer(&buf[0])) = ms.kernelSettings
+
+	for {
+		time.Sleep(time.Second)
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		via := c.(*net.UnixConn)
+		_, fds, err := getFd(via, 2)
+		if err != nil {
+			c.Close()
+			continue
+		}
+		syscall.Close(fds[0])
+		if len(fds) < 2 {
+			putFd(via, buf, ms.mountFd)
+		} else {
+			syscall.Close(fds[1])
+		}
+		// wait for supervisor
+		_, _, _ = getFd(via, 2)
+		c.Close()
+	}
+}
+
+func (ms *Server) closeFd() {
+	path := os.Getenv("_FUSE_FD_COMM")
+	if path == "" {
+		return
+	}
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	via := c.(*net.UnixConn)
+	_, fds, err := getFd(via, 2)
+	if err != nil {
+		c.Close()
+		return
+	}
+	syscall.Close(fds[0])
+	putFd(c.(*net.UnixConn), []byte("CLOSE"), 0)
+	c.Close()
 }
 
 func (o *MountOptions) optionsStrings() []string {
@@ -283,16 +386,15 @@ func handleEINTR(fn func() error) (err error) {
 // Returns a new request, or error. In case exitIdle is given, returns
 // nil, OK if we have too many readers already.
 func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
-	req = ms.reqPool.Get().(*request)
-	dest := ms.readPool.Get().([]byte)
-
 	ms.reqMu.Lock()
-	if ms.reqReaders >= ms.maxReaders {
+	if ms.shutdown || ms.reqReaders >= ms.maxReaders {
 		ms.reqMu.Unlock()
 		return nil, OK
 	}
 	ms.reqReaders++
 	ms.reqMu.Unlock()
+
+	dest := ms.readPool.Get().([]byte)
 
 	var n int
 	err := handleEINTR(func() error {
@@ -302,37 +404,98 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	})
 	if err != nil {
 		code = ToStatus(err)
-		ms.reqPool.Put(req)
+		ms.readPool.Put(dest)
 		ms.reqMu.Lock()
 		ms.reqReaders--
 		ms.reqMu.Unlock()
 		return nil, code
 	}
 
+	req = ms.reqPool.Get().(*request)
 	if ms.latencies != nil {
 		req.startTime = time.Now()
 	}
 	gobbled := req.setInput(dest[:n])
+	if !gobbled {
+		ms.readPool.Put(dest)
+	}
 
 	ms.reqMu.Lock()
 	defer ms.reqMu.Unlock()
+	ms.reqReaders--
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
 		return nil, status
 	}
+	if ms.recentUnique != nil {
+		ms.recentUnique = append(ms.recentUnique, req.inHeader.Unique)
+	}
 	req.inflightIndex = len(ms.reqInflight)
 	ms.reqInflight = append(ms.reqInflight, req)
-	if !gobbled {
-		ms.readPool.Put(dest)
-		dest = nil
-	}
-	ms.reqReaders--
-	if !ms.singleReader && ms.reqReaders < 2 && ms.reqReaders < ms.maxReaders {
+
+	if !ms.singleReader && ms.reqReaders < 2 && ms.reqReaders < ms.maxReaders && !ms.shutdown {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
 
 	return req, OK
+}
+
+func (ms *Server) checkLostRequests() {
+	go func() {
+		// issue a few requests to interrupt lost ones
+		var stat syscall.Statfs_t
+		for i := 0; i < 30; i++ {
+			os.Stat(ms.mountPoint)
+			syscall.Statfs(ms.mountPoint, &stat)
+			time.Sleep(time.Millisecond * 100)
+		}
+	}()
+	var recentUnique []uint64
+	time.Sleep(time.Second * 3)
+	for {
+		if len(ms.recentUnique) > 10 {
+			ms.reqMu.Lock()
+			recentUnique = ms.recentUnique
+			ms.recentUnique = nil
+			ms.reqMu.Unlock()
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	sort.Slice(recentUnique, func(i, j int) bool { return recentUnique[i] < recentUnique[j] })
+	var last = recentUnique[0]
+	for _, u := range recentUnique[:len(recentUnique)/2] {
+		for u > last+1 {
+			last++
+			// interrupt lost one
+			ms.returnInterrupted(last)
+		}
+	}
+	// interrupt historic ones
+	last = recentUnique[0] - 1
+	var c int
+	for last > 0 && c < 3e6 {
+		ms.returnInterrupted(last)
+		last--
+		c++
+	}
+}
+
+func (ms *Server) returnInterrupted(unique uint64) {
+	header := make([]byte, sizeOfOutHeader)
+	o := (*OutHeader)(unsafe.Pointer(&header[0]))
+	o.Unique = unique
+	o.Status = -int32(syscall.EINTR)
+	o.Length = uint32(sizeOfOutHeader)
+	err := handleEINTR(func() error {
+		_, err := syscall.Write(ms.mountFd, header)
+		return err
+	})
+	if err == nil {
+		log.Printf("FUSE: interrupt request %d", unique)
+	}
 }
 
 // returnRequest returns a request to the pool of unused requests.
@@ -367,7 +530,14 @@ func (ms *Server) returnRequest(req *request) {
 		req.bufferPoolInputBuf = nil
 		ms.readPool.Put(p)
 	}
-	ms.reqPool.Put(req)
+
+	select {
+	case <-req.cancel:
+		// canceled
+		log.Printf("request is canceled")
+	default:
+		ms.reqPool.Put(req)
+	}
 }
 
 func (ms *Server) recordStats(req *request) {
@@ -387,10 +557,6 @@ func (ms *Server) Serve() {
 	ms.loop(false)
 	ms.loops.Wait()
 
-	ms.writeMu.Lock()
-	syscall.Close(ms.mountFd)
-	ms.writeMu.Unlock()
-
 	// shutdown in-flight cache retrieves.
 	//
 	// It is possible that umount comes in the middle - after retrieve
@@ -407,12 +573,65 @@ func (ms *Server) Serve() {
 		reading.st = ENODEV
 		close(reading.ready)
 	}
+
+	ms.reqMu.Lock()
+	shutdown := ms.shutdown
+	ms.reqMu.Unlock()
+	if shutdown {
+		time.Sleep(time.Second * 10)
+		os.Exit(-1)
+	} else {
+		ms.closeFd()
+	}
+
+	ms.writeMu.Lock()
+	syscall.Close(ms.mountFd)
+	ms.writeMu.Unlock()
 }
 
 // Wait waits for the serve loop to exit. This should only be called
 // after Serve has been called, or it will hang indefinitely.
 func (ms *Server) Wait() {
 	ms.loops.Wait()
+}
+
+func (ms *Server) Shutdown() {
+	log.Printf("shutdown gracefully")
+	ms.reqMu.Lock()
+	ms.shutdown = true
+	for ms.reqReaders > 0 {
+		ms.reqMu.Unlock()
+		go func() {
+			var stat syscall.Statfs_t
+			_ = syscall.Statfs(ms.mountPoint, &stat)
+		}()
+		time.Sleep(time.Millisecond)
+		ms.reqMu.Lock()
+	}
+	ms.reqMu.Unlock()
+
+	go func() {
+		time.Sleep(time.Second * 3)
+		ms.reqMu.Lock()
+		for _, req := range ms.reqInflight {
+			if !req.interrupted {
+				close(req.cancel)
+				req.interrupted = true
+			}
+		}
+		ms.reqMu.Unlock()
+	}()
+
+	ms.Wait()
+	// double check
+	ms.reqMu.Lock()
+	if len(ms.reqInflight) > 0 {
+		log.Printf("there are %d requests in flight, interrupt them", len(ms.reqInflight))
+		for _, req := range ms.reqInflight {
+			ms.returnInterrupted(req.inHeader.Unique)
+		}
+	}
+	ms.reqMu.Unlock()
 }
 
 func (ms *Server) handleInit() Status {
