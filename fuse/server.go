@@ -456,10 +456,8 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 func (ms *Server) checkLostRequests() {
 	go func() {
 		// issue a few requests to interrupt lost ones
-		var stat syscall.Statfs_t
 		for i := 0; i < 30; i++ {
-			os.Stat(ms.mountPoint)
-			syscall.Statfs(ms.mountPoint, &stat)
+			ms.wakeupReader()
 			time.Sleep(time.Millisecond * 100)
 		}
 	}()
