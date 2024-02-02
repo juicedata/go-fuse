@@ -10,8 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func unixgramSocketpair() (l, r *os.File, err error) {
@@ -23,6 +26,34 @@ func unixgramSocketpair() (l, r *os.File, err error) {
 	l = os.NewFile(uintptr(fd[0]), "socketpair-half1")
 	r = os.NewFile(uintptr(fd[1]), "socketpair-half2")
 	return
+}
+
+func mtabNeedUpdate(mnt string) bool {
+	mtabPath := "/etc/mtab"
+	if strings.HasPrefix(mtabPath, mnt) {
+		return false
+	}
+	st, err := os.Lstat(mtabPath)
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	if unix.Access(mtabPath, unix.W_OK) != nil {
+		return false
+	}
+	return true
+}
+
+func updateMtab(source, mnt, _type, options string) {
+	cmd := exec.Cmd{
+		Path: "/bin/mount",
+		Args: []string{
+			"/bin/mount", "--no-canonicalize", "-i", "-f", "-t", "fuse." + _type, "-o", options, source, mnt,
+		},
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		println("update /etc/mtab: ", string(out))
+	}
 }
 
 // Create a FUSE FS on the specified mount point without using
@@ -74,6 +105,13 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 	if err != nil {
 		syscall.Close(fd)
 		return
+	}
+
+	if os.Geteuid() == 0 {
+		realmnt, _ := filepath.Abs(mountPoint)
+		if mtabNeedUpdate(realmnt) {
+			updateMtab(source, realmnt, opts.Name, strings.Join(r, ","))
+		}
 	}
 
 	// success
