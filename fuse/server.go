@@ -318,7 +318,7 @@ func handleEINTR(fn func() error) (err error) {
 // nil, OK if we have too many readers already.
 func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	ms.reqMu.Lock()
-	if ms.reqReaders > ms.maxReaders {
+	if ms.reqReaders >= ms.maxReaders {
 		ms.reqMu.Unlock()
 		return nil, OK
 	}
@@ -362,7 +362,7 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 		ms.readPool.Put(destIface)
 	}
 	ms.reqReaders--
-	if !ms.singleReader && ms.reqReaders <= 0 {
+	if !ms.singleReader && ms.reqReaders < 2 && ms.reqReaders < ms.maxReaders {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
