@@ -41,7 +41,7 @@ type Server struct {
 	fileSystem RawFileSystem
 
 	// writeMu serializes close and notify writes
-	writeMu sync.Mutex
+	writeMu sync.RWMutex
 
 	// I/O with kernel and daemon.
 	mountFd int
@@ -842,9 +842,9 @@ func (ms *Server) InodeNotify(node uint64, off int64, length int64) Status {
 	entry.Length = length
 
 	// Protect against concurrent close.
-	ms.writeMu.Lock()
+	ms.writeMu.RLock()
 	result := ms.write(&req)
-	ms.writeMu.Unlock()
+	ms.writeMu.RUnlock()
 
 	if ms.opts.Debug {
 		log.Println("Response: INODE_NOTIFY", result)
@@ -907,9 +907,9 @@ func (ms *Server) inodeNotifyStoreCache32(node uint64, offset int64, data []byte
 	req.flatData = data
 
 	// Protect against concurrent close.
-	ms.writeMu.Lock()
+	ms.writeMu.RLock()
 	result := ms.write(&req)
-	ms.writeMu.Unlock()
+	ms.writeMu.RUnlock()
 
 	if ms.opts.Debug {
 		log.Printf("Response: INODE_NOTIFY_STORE_CACHE: %v", result)
@@ -1002,9 +1002,9 @@ func (ms *Server) inodeRetrieveCache1(node uint64, offset int64, dest []byte) (n
 	ms.retrieveMu.Unlock()
 
 	// Protect against concurrent close.
-	ms.writeMu.Lock()
+	ms.writeMu.RLock()
 	result := ms.write(&req)
-	ms.writeMu.Unlock()
+	ms.writeMu.RUnlock()
 
 	if ms.opts.Debug {
 		log.Printf("Response: NOTIFY_RETRIEVE_CACHE: %v", result)
@@ -1080,9 +1080,9 @@ func (ms *Server) DeleteNotify(parent uint64, child uint64, name string) Status 
 	req.flatData = nameBytes
 
 	// Protect against concurrent close.
-	ms.writeMu.Lock()
+	ms.writeMu.RLock()
 	result := ms.write(&req)
-	ms.writeMu.Unlock()
+	ms.writeMu.RUnlock()
 
 	if ms.opts.Debug {
 		log.Printf("Response: DELETE_NOTIFY: %v", result)
@@ -1119,9 +1119,9 @@ func (ms *Server) EntryNotify(parent uint64, name string) Status {
 	req.flatData = nameBytes
 
 	// Protect against concurrent close.
-	ms.writeMu.Lock()
+	ms.writeMu.RLock()
 	result := ms.write(&req)
-	ms.writeMu.Unlock()
+	ms.writeMu.RUnlock()
 
 	if ms.opts.Debug {
 		log.Printf("Response: ENTRY_NOTIFY: %v", result)
