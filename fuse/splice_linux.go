@@ -25,32 +25,27 @@ func (s *Server) setSplice() {
 // This dance is neccessary because header and payload cannot be split across
 // two splices and we cannot seek in a pipe buffer.
 func (ms *Server) trySplice(header []byte, req *request) error {
-	// Get a pipe of connected pipes
-	pipe, err := splice.Get()
+	var err error
+
+	// Get a pair of connected pipes
+	pair1, err := splice.Get()
 	if err != nil {
 		return err
 	}
-	defer splice.Done(pipe)
+	defer splice.Done(pair1)
 
 	size := req.flatDataSize()
-	total := len(header) + size
 	// Grow buffer pipe to requested size + one extra page
 	// Without the extra page the kernel will block once the pipe is almost full
-	if err := pipe.Grow(total + pageSize); err != nil {
+	pair1Sz := size + pageSize
+	if err := pair1.Grow(pair1Sz); err != nil {
 		return err
 	}
 
 	if req.fdData != nil {
-		n, err := pipe.Write(header)
-		if err != nil {
-			return err
-		}
-		if n != len(header) {
-			return fmt.Errorf("Short write into splice: wrote %d, want %d", n, len(header))
-		}
 		// Read data from file
 		fdData := req.fdData
-		n, err = pipe.LoadFromAt(fdData.Fd, size, fdData.Off)
+		n, err := pair1.LoadFromAt(fdData.Fd, size, fdData.Off)
 		if err != nil {
 			// TODO - extract the data from splice.
 			return err
@@ -59,19 +54,53 @@ func (ms *Server) trySplice(header []byte, req *request) error {
 			return fmt.Errorf("short read from file: %d < %d", n, size)
 		}
 	} else {
-		bufs := [][]byte{header}
+		bufs := [][]byte{}
 		if req.slices != nil {
 			bufs = append(bufs, req.slices...)
 		} else {
 			bufs = append(bufs, req.flatData)
 		}
-		_, err := writev(int(pipe.WriteFd()), bufs)
+		_, err := writev(int(pair1.WriteFd()), bufs)
 		if err != nil {
 			return err
 		}
 	}
 
+	// Get another pair of connected pipes
+	pair2, err := splice.Get()
+	if err != nil {
+		return err
+	}
+	defer splice.Done(pair2)
+
+	// Grow pipe to header + actually read size + one extra page
+	// Without the extra page the kernel will block once the pipe is almost full
+	header = req.serializeHeader(size)
+	total := len(header) + size
+	pair2Sz := total + pageSize
+	if err := pair2.Grow(pair2Sz); err != nil {
+		return err
+	}
+
+	// Write header into pair2
+	n, err := pair2.Write(header)
+	if err != nil {
+		return err
+	}
+	if n != len(header) {
+		return fmt.Errorf("Short write into splice: wrote %d, want %d", n, len(header))
+	}
+
+	// Write data into pair2
+	n, err = pair2.LoadFrom(pair1.ReadFd(), size)
+	if err != nil {
+		return err
+	}
+	if n != size {
+		return fmt.Errorf("Short splice: wrote %d, want %d", n, size)
+	}
+
 	// Write header + data to /dev/fuse
-	_, err = pipe.WriteTo(uintptr(ms.mountFd), total)
+	_, err = pair2.WriteTo(uintptr(ms.mountFd), total)
 	return err
 }

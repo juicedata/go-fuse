@@ -22,7 +22,7 @@ func (p *Pair) LoadFrom(fd uintptr, sz int) (int, error) {
 			sz, p.size)
 	}
 
-	n, err := syscall.Splice(int(fd), nil, p.w, nil, sz, 0)
+	n, err := syscall.Splice(int(fd), nil, p.w, nil, sz, _SPLICE_F_MOVE)
 	if err != nil {
 		err = os.NewSyscallError("Splice load from", err)
 	}
@@ -30,13 +30,14 @@ func (p *Pair) LoadFrom(fd uintptr, sz int) (int, error) {
 }
 
 func (p *Pair) WriteTo(fd uintptr, n int) (int, error) {
-	m, err := syscall.Splice(p.r, nil, int(fd), nil, int(n), 0)
+	m, err := syscall.Splice(p.r, nil, int(fd), nil, int(n), _SPLICE_F_MOVE)
 	if err != nil {
 		err = os.NewSyscallError("Splice write", err)
 	}
 	return int(m), err
 }
 
+const _SPLICE_F_MOVE = 0x01
 const _SPLICE_F_NONBLOCK = 0x2
 
 func (p *Pair) discard() {
