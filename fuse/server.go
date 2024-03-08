@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/hanwen/go-fuse/v2/splice"
 )
 
 const (
@@ -835,11 +837,8 @@ func (ms *Server) InodeNotifyStoreCache(node uint64, offset int64, data []byte) 
 
 	for len(data) > 0 {
 		size := len(data)
-		if size > math.MaxInt32 {
-			// NotifyStoreOut has only uint32 for size.
-			// we check for max(int32), not max(uint32), because on 32-bit
-			// platforms int has only 31-bit for positive range.
-			size = math.MaxInt32
+		if size > splice.MaxPipeSize() {
+			size = splice.MaxPipeSize()
 		}
 
 		st := ms.inodeNotifyStoreCache32(node, offset, data[:size])

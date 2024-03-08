@@ -22,7 +22,9 @@ func (ms *Server) systemWrite(req *request, header []byte) Status {
 	if ms.canSplice && ms.opts.MinSpliceSize > 0 && size > ms.opts.MinSpliceSize {
 		err := ms.trySplice(header, req)
 		if err == nil {
-			req.readResult.Done()
+			if req.readResult != nil {
+				req.readResult.Done()
+			}
 			return OK
 		}
 		log.Println("trySplice:", err)
