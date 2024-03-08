@@ -7,6 +7,8 @@ package fuse
 import (
 	"log"
 	"syscall"
+
+	"github.com/hanwen/go-fuse/v2/splice"
 )
 
 func (ms *Server) systemWrite(req *request, header []byte) Status {
@@ -19,7 +21,8 @@ func (ms *Server) systemWrite(req *request, header []byte) Status {
 		return ToStatus(err)
 	}
 
-	if ms.canSplice && ms.opts.MinSpliceSize > 0 && size > ms.opts.MinSpliceSize {
+	if ms.canSplice && size < splice.MaxPipeSize()-pageSize*2 &&
+		(req.fdData != nil || ms.opts.MinSpliceSize > 0 && size >= ms.opts.MinSpliceSize) {
 		err := ms.trySplice(header, req)
 		if err == nil {
 			if req.readResult != nil {

@@ -837,8 +837,8 @@ func (ms *Server) InodeNotifyStoreCache(node uint64, offset int64, data []byte) 
 
 	for len(data) > 0 {
 		size := len(data)
-		if size > splice.MaxPipeSize() {
-			size = splice.MaxPipeSize()
+		if size > splice.MaxPipeSize()-pageSize*2 {
+			size = splice.MaxPipeSize() - pageSize*2
 		}
 
 		st := ms.inodeNotifyStoreCache32(node, offset, data[:size])

@@ -6,7 +6,6 @@ package fuse
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/hanwen/go-fuse/v2/splice"
 )
@@ -37,8 +36,7 @@ func (ms *Server) trySplice(header []byte, req *request) error {
 	total := len(header) + size
 	// Grow buffer pipe to requested size + one extra page
 	// Without the extra page the kernel will block once the pipe is almost full
-	pair1Sz := total + os.Getpagesize()
-	if err := pipe.Grow(pair1Sz); err != nil {
+	if err := pipe.Grow(total + pageSize); err != nil {
 		return err
 	}
 
