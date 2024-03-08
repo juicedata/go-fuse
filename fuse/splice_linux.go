@@ -42,7 +42,7 @@ func (ms *Server) trySplice(header []byte, req *request) error {
 		return err
 	}
 
-	if req.fdData == nil {
+	if req.fdData != nil {
 		n, err := pipe.Write(header)
 		if err != nil {
 			return err
