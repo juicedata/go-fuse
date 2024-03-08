@@ -67,8 +67,7 @@
 // Typically, each call of the API happens in its own
 // goroutine, so take care to make the file system thread-safe.
 //
-//
-// Higher level interfaces
+// # Higher level interfaces
 //
 // As said above this packages provides way to implement filesystems in terms of
 // raw FUSE protocol. Additionally packages nodefs and pathfs provide ways to
@@ -122,6 +121,9 @@ type MountOptions struct {
 	// Max read ahead to use.  If 0, use default. This number is
 	// capped at the kernel maximum.
 	MaxReadAhead int
+
+	// If set, the min number of bytes to use Splice
+	MinSpliceSize int
 
 	// If IgnoreSecurityLabels is set, all security related xattr
 	// requests will return NO_DATA without passing through the

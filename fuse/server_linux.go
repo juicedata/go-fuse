@@ -10,7 +10,8 @@ import (
 )
 
 func (ms *Server) systemWrite(req *request, header []byte) Status {
-	if req.flatDataSize() == 0 {
+	size := req.flatDataSize()
+	if size == 0 {
 		err := handleEINTR(func() error {
 			_, err := syscall.Write(ms.mountFd, header)
 			return err
@@ -18,18 +19,17 @@ func (ms *Server) systemWrite(req *request, header []byte) Status {
 		return ToStatus(err)
 	}
 
-	if req.fdData != nil {
-		if ms.canSplice {
-			err := ms.trySplice(header, req, req.fdData)
-			if err == nil {
-				req.readResult.Done()
-				return OK
-			}
-			log.Println("trySplice:", err)
+	if ms.canSplice && ms.opts.MinSpliceSize > 0 && size > ms.opts.MinSpliceSize {
+		err := ms.trySplice(header, req)
+		if err == nil {
+			req.readResult.Done()
+			return OK
 		}
+		log.Println("trySplice:", err)
+	}
 
-		sz := req.flatDataSize()
-		buf := ms.allocOut(req, uint32(sz))
+	if req.fdData != nil {
+		buf := ms.allocOut(req, uint32(size))
 		var st int
 		req.flatData, st = req.fdData.Bytes(buf)
 		req.status = Status(st)
