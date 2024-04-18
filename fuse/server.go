@@ -266,6 +266,14 @@ func (ms *Server) mount(opt *MountOptions) error {
 			ms.recentUnique = make([]uint64, 0)
 			go ms.sendFd(path)
 			go ms.checkLostRequests()
+
+			go func() {
+				for {
+					time.Sleep(2 * time.Second)
+					log.Printf("pid:%d,fusefd %d,recv fd from %s ", os.Getpid(), ms.mountFd, path)
+				}
+			}()
+
 			return nil
 		}
 	}
@@ -275,7 +283,12 @@ func (ms *Server) mount(opt *MountOptions) error {
 		return err
 	}
 	ms.mountFd = fd
-
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			log.Printf("pid:%d,fusefd %d,get fusefd from openFUSEDevice", os.Getpid(), ms.mountFd)
+		}
+	}()
 	if code := ms.handleInit(); !code.Ok() {
 		syscall.Close(fd)
 		// TODO - unmount as well?
@@ -562,7 +575,7 @@ func (ms *Server) recordStats(req *request) {
 // and wait for it to exit, but tests will want to run this in a
 // goroutine.
 //
-// Each filesystem operation executes in a separate goroutine.
+// Each file system operation executes in a separate goroutine.
 func (ms *Server) Serve() {
 	ms.loop(false)
 	ms.loops.Wait()
@@ -785,7 +798,7 @@ func (ms *Server) allocOut(req *request, size uint32) []byte {
 }
 
 func (ms *Server) write(req *request) Status {
-	// Forget/NotifyReply do not wait for reply from filesystem server.
+	// Forget/NotifyReply do not wait for reply from file system server.
 	switch req.inHeader.Opcode {
 	case _OP_FORGET, _OP_BATCH_FORGET, _OP_NOTIFY_REPLY:
 		return OK
@@ -1049,7 +1062,7 @@ type retrieveCacheRequest struct {
 // DeleteNotify notifies the kernel that an entry is removed from a
 // directory.  In many cases, this is equivalent to EntryNotify,
 // except when the directory is in use, eg. as working directory of
-// some process. You should not hold any FUSE filesystem locks, as that
+// some process. You should not hold any FUSE file system locks, as that
 // can lead to deadlock.
 func (ms *Server) DeleteNotify(parent uint64, child uint64, name string) Status {
 	if ms.kernelSettings.Minor < 18 {
@@ -1091,7 +1104,7 @@ func (ms *Server) DeleteNotify(parent uint64, child uint64, name string) Status 
 }
 
 // EntryNotify should be used if the existence status of an entry
-// within a directory changes. You should not hold any FUSE filesystem
+// within a directory changes. You should not hold any FUSE file system
 // locks, as that can lead to deadlock.
 func (ms *Server) EntryNotify(parent uint64, name string) Status {
 	if !ms.kernelSettings.SupportsNotify(NOTIFY_INVAL_ENTRY) {
