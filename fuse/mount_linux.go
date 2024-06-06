@@ -72,7 +72,7 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 		source = opts.Name
 	}
 
-	var flags uintptr
+	var flags uintptr = opts.DirectMountFlags
 	flags |= syscall.MS_NOSUID | syscall.MS_NODEV
 
 	// some values we need to pass to mount, but override possible since opts.Options comes after
@@ -82,13 +82,17 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 		"user_id=0",
 		"group_id=0",
 	}
-	r = append(r, opts.Options...)
+	for _, o := range opts.Options {
+		if o != "nonempty" && o != "allow_root" {
+			r = append(r, o)
+		}
+	}
 
 	if opts.AllowOther {
 		r = append(r, "allow_other")
 	}
 
-	err = syscall.Mount(opts.FsName, mountPoint, "fuse."+opts.Name, opts.DirectMountFlags, strings.Join(r, ","))
+	err = syscall.Mount(source, mountPoint, "fuse."+opts.Name, flags, strings.Join(r, ","))
 	if err != nil {
 		syscall.Close(fd)
 		return

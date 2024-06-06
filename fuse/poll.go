@@ -15,38 +15,29 @@ func doPollHackLookup(ms *Server, req *request) {
 		Nlink: 1,
 	}
 	switch req.inHeader.Opcode {
-	case _OP_LOOKUP:
-		out := (*EntryOut)(req.outData())
-		*out = EntryOut{
+	case _OP_CREATE:
+		out := (*CreateOut)(req.outData())
+		out.EntryOut = EntryOut{
 			NodeId: pollHackInode,
 			Attr:   attr,
 		}
-		req.status = OK
-	case _OP_OPEN:
-		out := (*OpenOut)(req.outData())
-		*out = OpenOut{
+		out.OpenOut = OpenOut{
 			Fh: pollHackInode,
 		}
 		req.status = OK
-	case _OP_GETATTR, _OP_SETATTR:
+	case _OP_LOOKUP:
+		out := (*EntryOut)(req.outData())
+		*out = EntryOut{}
+		req.status = ENOENT
+	case _OP_GETATTR:
 		out := (*AttrOut)(req.outData())
 		out.Attr = attr
 		req.status = OK
-	case _OP_GETXATTR:
-		// Kernel will try to read acl xattrs. Pretend we don't have any.
-		req.status = ENODATA
 	case _OP_POLL:
 		req.status = ENOSYS
-
-	case _OP_ACCESS, _OP_FLUSH, _OP_RELEASE:
-		// Avoid upsetting the OSX mount process.
-		req.status = OK
 	default:
 		// We want to avoid switching off features through our
-		// poll hack, so don't use ENOSYS. It would be nice if
-		// we could transmit no error code at all, but for
-		// some opcodes, we'd have to invent credible data to
-		// return as well.
+		// poll hack, so don't use ENOSYS.
 		req.status = ERANGE
 	}
 }
