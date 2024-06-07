@@ -31,9 +31,6 @@ const (
 
 	minMaxReaders = 1
 	maxMaxReaders = 4
-
-	DEFAULT_MAX_PAGES = 32
-	MAX_MAX_PAGES     = 256
 )
 
 // Server contains the logic for reading from the FUSE device and
@@ -164,12 +161,6 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 	}
 	if o.MaxWrite > MAX_KERNEL_WRITE {
 		o.MaxWrite = MAX_KERNEL_WRITE
-	}
-	if o.MaxPages <= 0 {
-		o.MaxPages = DEFAULT_MAX_PAGES
-	}
-	if o.MaxPages > MAX_MAX_PAGES {
-		o.MaxPages = MAX_MAX_PAGES
 	}
 	if o.Name == "" {
 		name := fs.String()
