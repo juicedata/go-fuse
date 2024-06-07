@@ -159,10 +159,6 @@ type MountOptions struct {
 	// (up to MaxWrite or VM_READAHEAD_PAGES=128 kiB, whichever is less).
 	MaxReadAhead int
 
-	// Max pages to use.  If 0, use default. This number is
-	// capped at the kernel maximum.
-	MaxPages int
-
 	// If IgnoreSecurityLabels is set, all security related xattr
 	// requests will return NO_DATA without passing through the
 	// user defined filesystem.  You should only set this if you
