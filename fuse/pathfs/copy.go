@@ -37,9 +37,9 @@ func CopyFile(srcFs, destFs FileSystem, srcFile, destFile string, context *fuse.
 		if !code.Ok() {
 			return code
 		}
-		data, code := res.Bytes(buf)
-		if !code.Ok() {
-			return code
+		data, errNo := res.Bytes(buf)
+		if errNo != 0 {
+			return fuse.Status(errNo)
 		}
 
 		if len(data) == 0 {
