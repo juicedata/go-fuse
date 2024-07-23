@@ -118,6 +118,14 @@ func mount(mountPoint string, opts *MountOptions, ready chan<- error) (fd int, e
 		}
 	}
 
+	fd = parseFuseFd(mountPoint)
+	if fd >= 0 {
+		if opts.Debug {
+			log.Printf("mount: magic mountpoint %q, using fd %d", mountPoint, fd)
+		}
+    return fd, nil
+	} 
+
 	local, remote, err := unixgramSocketpair()
 	if err != nil {
 		return
