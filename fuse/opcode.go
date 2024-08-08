@@ -10,6 +10,7 @@ import (
 	"log"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 	"unsafe"
@@ -779,7 +780,16 @@ func init() {
 		_OP_COPY_FILE_RANGE: doCopyFileRange,
 		_OP_LSEEK:           doLseek,
 	} {
-		operationHandlers[op].Func = v
+		handler := v
+		operationHandlers[op].Func = func(s *Server, r *request) {
+			defer func() {
+				if e := recover(); e != nil {
+					r.status = EIO
+					log.Printf("raw filesystem recovered, io error: %v\nstacktrace: \n%s", e, string(debug.Stack()))
+				}
+			}()
+			handler(s, r)
+		}
 	}
 
 	// Outputs.
