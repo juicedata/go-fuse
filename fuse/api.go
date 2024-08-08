@@ -289,6 +289,12 @@ type MountOptions struct {
 	EnableWriteback bool
 
 	EnableIoctl bool
+
+	// If set, tell kernel not to apply umask for create/mkdir/mknod
+	DontUmask bool
+
+	// Other capability flags
+	OtherCaps uint32
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
