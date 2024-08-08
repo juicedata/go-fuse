@@ -287,6 +287,8 @@ type MountOptions struct {
 
 	// EnableWriteback enables kernel writeback cache.
 	EnableWriteback bool
+
+	EnableIoctl bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
@@ -395,6 +397,8 @@ type RawFileSystem interface {
 	FsyncDir(cancel <-chan struct{}, input *FsyncIn) (code Status)
 
 	StatFs(cancel <-chan struct{}, input *InHeader, out *StatfsOut) (code Status)
+
+	Ioctl(cancel <-chan struct{}, in *IoctlIn, out *IoctlOut, bufIn, bufOut []byte) Status
 
 	// This is called on processing the first request. The
 	// filesystem implementation can use the server argument to
