@@ -91,7 +91,11 @@ func mountDirect(mountPoint string, opts *MountOptions, ready chan<- error) (fd 
 		// match what we do with fusermount
 		fmt.Sprintf("max_read=%d", opts.MaxWrite),
 	}
-	r = append(r, opts.Options...)
+	for _, o := range opts.Options {
+		if o != "nonempty" && o != "allow_root" {
+			r = append(r, o)
+		}
+	}
 
 	if opts.AllowOther {
 		r = append(r, "allow_other")
