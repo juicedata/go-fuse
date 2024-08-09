@@ -33,7 +33,13 @@ func (ms *Server) systemWrite(req *request, header []byte) Status {
 		header = req.serializeHeader(len(req.flatData))
 	}
 
-	_, err := writev(ms.mountFd, [][]byte{header, req.flatData})
+	bufs := [][]byte{header}
+	if req.slices != nil {
+		bufs = append(bufs, req.slices...)
+	} else {
+		bufs = append(bufs, req.flatData)
+	}
+	_, err := writev(ms.mountFd, bufs)
 	if req.readResult != nil {
 		req.readResult.Done()
 	}

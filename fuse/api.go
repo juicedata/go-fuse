@@ -295,6 +295,9 @@ type MountOptions struct {
 
 	// Other capability flags
 	OtherCaps uint32
+
+	// don't alloc buffer for read operation
+	NoAllocForRead bool
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
