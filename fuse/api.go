@@ -90,6 +90,8 @@
 // you care about correctness.
 package fuse
 
+import "time"
+
 // Types for users to implement.
 
 // The result of Read is an array of bytes, but for performance
@@ -227,6 +229,9 @@ type MountOptions struct {
 
 	// don't alloc buffer for read operation
 	NoAllocForRead bool
+
+	// max duration for a request
+	Timeout time.Duration
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
