@@ -194,3 +194,9 @@ func mountV4(mountPoint string, opts *MountOptions, ready chan<- error) (fd int,
 func unmount(dir string, opts *MountOptions) error {
 	return syscall.Unmount(dir, 0)
 }
+
+// parseFuseFd checks if `mountPoint` is the special form /dev/fd/N (with N >= 0),
+// and returns N in this case. Returns -1 otherwise.
+func parseFuseFd(mountPoint string) (fd int) {
+	return -1
+}
