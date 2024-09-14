@@ -532,10 +532,10 @@ func (ms *Server) recordStats(req *request) {
 //
 // Each filesystem operation executes in a separate goroutine.
 func (ms *Server) Serve() {
-	ms.loop(false)
 	if ms.opts.Timeout > 0 {
-		go ms.checkHangRequests(ms.opts.Timeout)
+		go ms.checkRequestTimeout(ms.opts.Timeout)
 	}
+	ms.loop(false)
 	ms.loops.Wait()
 
 	// shutdown in-flight cache retrieves.
@@ -573,7 +573,7 @@ func (ms *Server) wakeupReader() {
 	_ = cmd.Run()
 }
 
-func (ms *Server) checkHangRequests(timeout time.Duration) {
+func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 	for {
 		time.Sleep(timeout / 100)
 		var batch = 100
