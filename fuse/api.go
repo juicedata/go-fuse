@@ -122,7 +122,10 @@
 // [2] https://sylabs.io/guides/3.7/user-guide/bind_paths_and_mounts.html#fuse-mounts
 package fuse
 
-import "log"
+import (
+	"log"
+	"time"
+)
 
 // Types for users to implement.
 
@@ -298,6 +301,9 @@ type MountOptions struct {
 
 	// don't alloc buffer for read operation
 	NoAllocForRead bool
+
+	// max duration for a request
+	Timeout time.Duration
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
