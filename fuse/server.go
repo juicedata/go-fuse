@@ -454,7 +454,7 @@ func (ms *Server) checkLostRequests() {
 	// interrupt historic ones
 	last = recentUnique[0] - 1
 	var c int
-	for last > 0 && c < 3e6 {
+	for last > 0 && c < 6e6 {
 		ms.returnInterrupted(last)
 		last--
 		c++
@@ -575,12 +575,12 @@ func (ms *Server) wakeupReader() {
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 	for {
-		time.Sleep(timeout / 100)
+		time.Sleep(time.Second)
 		var batch = 100
 		for i := 0; ; i += batch {
 			now := time.Now()
 			ms.reqMu.Lock()
-			if ms.shutdown {
+			if ms.shutdown || i >= len(ms.reqInflight) {
 				ms.reqMu.Unlock()
 				break
 			}
@@ -591,7 +591,7 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 					ms.reqMu.Unlock()
 					ms.returnInterrupted(unique)
 					ms.reqMu.Lock()
-				} else if used := now.Sub(req.startTime); used > timeout || req.inHeader.Unique+2e6 > ms.maxUnique {
+				} else if used := now.Sub(req.startTime); used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique {
 					log.Printf("interrupt request %d after %s: %+v", req.inHeader.Unique, used, req.inHeader)
 					req.interrupted = true
 					close(req.cancel)
