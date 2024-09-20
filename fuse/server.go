@@ -5,6 +5,7 @@
 package fuse
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -413,6 +415,26 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	return req, OK
 }
 
+func (ms *Server) getRootInode() (int, error) {
+	if ms.mountPoint == "" {
+		return 0, syscall.ENOENT
+	}
+	var argName = "-c"
+	if runtime.GOOS == "darwin" {
+		argName = "-f"
+	}
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "stat", argName, "%i", ms.mountPoint)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(string(out))
+}
+
 func (ms *Server) checkLostRequests() {
 	go func() {
 		// issue a few requests to interrupt lost ones
@@ -421,17 +443,30 @@ func (ms *Server) checkLostRequests() {
 			time.Sleep(time.Millisecond * 100)
 		}
 	}()
+	start := time.Now()
 	var recentUnique []uint64
 	time.Sleep(time.Second * 3)
 	for {
 		ms.reqMu.Lock()
-		if len(ms.recentUnique) >= 30 {
+		if ms.shutdown {
+			ms.reqMu.Unlock()
+			return
+		}
+		used := time.Since(start)
+		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
 			recentUnique = ms.recentUnique
 			ms.recentUnique = nil
 			ms.reqMu.Unlock()
 			break
 		}
 		ms.reqMu.Unlock()
+		if used > time.Second*30 {
+			root, _ := ms.getRootInode()
+			if root > 1 {
+				log.Printf("FUSE: %s is umounted, give up after %s ", ms.mountPoint, used)
+				os.Exit(0)
+			}
+		}
 		time.Sleep(time.Second)
 	}
 
