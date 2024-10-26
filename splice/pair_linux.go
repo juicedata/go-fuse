@@ -11,6 +11,12 @@ import (
 	"syscall"
 )
 
+func osPipe() (int, int, error) {
+	var fds [2]int
+	err := syscall.Pipe2(fds[:], syscall.O_NONBLOCK)
+	return fds[0], fds[1], err
+}
+
 func (p *Pair) LoadFromAt(fd uintptr, sz int, off int64) (int, error) {
 	n, err := syscall.Splice(int(fd), &off, p.w, nil, sz, 0)
 	return int(n), err

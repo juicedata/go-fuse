@@ -4,7 +4,15 @@
 
 package splice
 
-import ()
+import (
+	"syscall"
+)
+
+func osPipe() (int, int, error) {
+	var fds [2]int
+	err := syscall.Pipe(fds[:])
+	return fds[0], fds[1], err
+}
 
 func (p *Pair) LoadFromAt(fd uintptr, sz int, off int64) (int, error) {
 	panic("not implemented")
@@ -19,4 +27,8 @@ func (p *Pair) LoadFrom(fd uintptr, sz int) (int, error) {
 func (p *Pair) WriteTo(fd uintptr, n int) (int, error) {
 	panic("not implemented")
 	return 0, nil
+}
+
+func (p *Pair) discard() {
+	panic("not implemented")
 }
