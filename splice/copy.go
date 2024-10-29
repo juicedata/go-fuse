@@ -5,13 +5,28 @@
 package splice
 
 import (
+	"fmt"
 	"io"
 	"os"
 )
 
+// NOTE: DEPRECIATED
+const (
+	FADVISE_NORMAL     = 0x0
+	FADVISE_RANDOM     = 0x1
+	FADVISE_SEQUENTIAL = 0x2
+	FADVISE_WILLNEED   = 0x3
+	FADVISE_DONTNEED   = 0x4
+	FADVISE_NOREUSE    = 0x5
+)
+
 func SpliceCopy(dst *os.File, src *os.File, p *Pair) (int64, error) {
 	total := int64(0)
-
+	st, _ := src.Stat()
+	err := Fadvise64(int(src.Fd()), 0, st.Size(), FADVISE_SEQUENTIAL)
+	if err != nil {
+		fmt.Println("Fadvise64 error:", err)
+	}
 	for {
 		n, err := p.LoadFrom(src.Fd(), p.size)
 		if err != nil {

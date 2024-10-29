@@ -58,3 +58,16 @@ func (p *Pair) discard() {
 		log.Panicf("splicing into /dev/null: %v (close R %d '%v', close W %d '%v')", err, p.r, errR, p.w, errW)
 	}
 }
+
+// NOTE: DEPRECIATED
+func Fadvise64(fd int, offset int64, length int64, advice int) error {
+	_, _, errno := syscall.Syscall6(syscall.SYS_FADVISE64,
+		uintptr(fd),
+		uintptr(offset),
+		uintptr(length),
+		uintptr(advice), 0, 0)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}

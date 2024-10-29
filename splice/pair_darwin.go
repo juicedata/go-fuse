@@ -32,3 +32,7 @@ func (p *Pair) WriteTo(fd uintptr, n int) (int, error) {
 func (p *Pair) discard() {
 	panic("not implemented")
 }
+
+func Fadvise64(fd int, offset int64, length int64, advice int) error {
+	return nil
+}
