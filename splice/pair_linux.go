@@ -11,6 +11,9 @@ import (
 	"syscall"
 )
 
+const _SPLICE_F_MOVE = 0x1
+const _SPLICE_F_NONBLOCK = 0x2
+
 func (p *Pair) LoadFromAt(fd uintptr, sz int, off int64) (int, error) {
 	n, err := syscall.Splice(int(fd), &off, p.w, nil, sz, 0)
 	return int(n), err
@@ -30,14 +33,12 @@ func (p *Pair) LoadFrom(fd uintptr, sz int) (int, error) {
 }
 
 func (p *Pair) WriteTo(fd uintptr, n int) (int, error) {
-	m, err := syscall.Splice(p.r, nil, int(fd), nil, int(n), 0)
+	m, err := syscall.Splice(p.r, nil, int(fd), nil, int(n), _SPLICE_F_MOVE)
 	if err != nil {
 		err = os.NewSyscallError("Splice write", err)
 	}
 	return int(m), err
 }
-
-const _SPLICE_F_NONBLOCK = 0x2
 
 func (p *Pair) discard() {
 	_, err := syscall.Splice(p.r, nil, devNullFD(), nil, int(p.size), _SPLICE_F_NONBLOCK)

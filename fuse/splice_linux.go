@@ -29,48 +29,25 @@ func (s *Server) setSplice() {
 // This dance is neccessary because header and payload cannot be split across
 // two splices and we cannot seek in a pipe buffer.
 func (ms *Server) trySplice(header []byte, req *request, fdData *readResultFd) error {
-	var err error
-
 	// Get a pair of connected pipes
-	pair1, err := splice.Get()
+	pair, err := splice.Get()
 	if err != nil {
 		return err
 	}
-	defer splice.Done(pair1)
-
-	// Grow buffer pipe to requested size + one extra page
-	// Without the extra page the kernel will block once the pipe is almost full
-	pair1Sz := fdData.Size() + os.Getpagesize()
-	if err := pair1.Grow(pair1Sz); err != nil {
-		return err
-	}
-
-	// Read data from file
-	payloadLen, err := pair1.LoadFromAt(fdData.Fd, fdData.Size(), fdData.Off)
-
-	if err != nil {
-		// TODO - extract the data from splice.
-		return err
-	}
-
-	// Get another pair of connected pipes
-	pair2, err := splice.Get()
-	if err != nil {
-		return err
-	}
-	defer splice.Done(pair2)
+	defer splice.Done(pair)
 
 	// Grow pipe to header + actually read size + one extra page
 	// Without the extra page the kernel will block once the pipe is almost full
+	payloadLen := fdData.Size()
 	header = req.serializeHeader(payloadLen)
 	total := len(header) + payloadLen
-	pair2Sz := total + os.Getpagesize()
-	if err := pair2.Grow(pair2Sz); err != nil {
+	// FIXME: use pipes big enough to skip the Grow()?
+	if err := pair.Grow(total + os.Getpagesize()); err != nil {
 		return err
 	}
 
 	// Write header into pair2
-	n, err := pair2.Write(header)
+	n, err := pair.Write(header)
 	if err != nil {
 		return err
 	}
@@ -79,7 +56,7 @@ func (ms *Server) trySplice(header []byte, req *request, fdData *readResultFd) e
 	}
 
 	// Write data into pair2
-	n, err = pair2.LoadFrom(pair1.ReadFd(), payloadLen)
+	n, err = pair.LoadFrom(fdData.Fd, payloadLen)
 	if err != nil {
 		return err
 	}
@@ -88,10 +65,6 @@ func (ms *Server) trySplice(header []byte, req *request, fdData *readResultFd) e
 	}
 
 	// Write header + data to /dev/fuse
-	_, err = pair2.WriteTo(uintptr(ms.mountFd), total)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = pair.WriteTo(uintptr(ms.mountFd), total)
+	return err
 }
