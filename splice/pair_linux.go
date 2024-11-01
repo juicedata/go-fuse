@@ -39,6 +39,18 @@ func (p *Pair) WriteTo(fd uintptr, n int) (int, error) {
 
 const _SPLICE_F_NONBLOCK = 0x2
 
+// We empty pipes by splicing to /dev/null.
+func devNullFD() int {
+	devNullFDOnce.Do(func() {
+		fd, err := syscall.Open("/dev/null", os.O_WRONLY, 0)
+		if err != nil {
+			panic(fmt.Sprintf("failed to open /dev/null: %s", err))
+		}
+		devNullFDValue = fd
+	})
+	return devNullFDValue
+}
+
 func (p *Pair) discard() {
 	_, err := syscall.Splice(p.r, nil, devNullFD(), nil, int(p.size), _SPLICE_F_NONBLOCK)
 	if err == syscall.EAGAIN {
@@ -51,4 +63,21 @@ func (p *Pair) discard() {
 		// inadvertently (eg. double close)
 		log.Panicf("splicing into /dev/null: %v (close R %d '%v', close W %d '%v')", err, p.r, errR, p.w, errW)
 	}
+}
+
+func (p *Pair) Close() error {
+	err1 := syscall.Close(p.r)
+	err2 := syscall.Close(p.w)
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+func (p *Pair) Read(d []byte) (n int, err error) {
+	return syscall.Read(p.r, d)
+}
+
+func (p *Pair) Write(d []byte) (n int, err error) {
+	return syscall.Write(p.w, d)
 }

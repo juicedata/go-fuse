@@ -11,8 +11,8 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"runtime"
 	"sync"
-	"syscall"
 )
 
 var maxPipeSize int
@@ -37,6 +37,9 @@ var (
 )
 
 func init() {
+	if runtime.GOOS != "linux" {
+		return
+	}
 	content, err := ioutil.ReadFile("/proc/sys/fs/pipe-max-size")
 	if err != nil {
 		maxPipeSize = DefaultPipeSize
@@ -56,34 +59,8 @@ func init() {
 	w.Close()
 }
 
-// We empty pipes by splicing to /dev/null.
-func devNullFD() int {
-	devNullFDOnce.Do(func() {
-		fd, err := syscall.Open("/dev/null", os.O_WRONLY, 0)
-		if err != nil {
-			panic(fmt.Sprintf("failed to open /dev/null: %s", err))
-		}
-		devNullFDValue = fd
-	})
-	return devNullFDValue
-}
-
-// copy & paste from syscall.
-func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {
-	r0, _, e1 := syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(cmd), uintptr(arg))
-	val = int(r0)
-	errno = syscall.Errno(e1)
-	return
-}
-
 const F_SETPIPE_SZ = 1031
 const F_GETPIPE_SZ = 1032
-
-func osPipe() (int, int, error) {
-	var fds [2]int
-	err := syscall.Pipe2(fds[:], syscall.O_NONBLOCK)
-	return fds[0], fds[1], err
-}
 
 func newSplicePair() (p *Pair, err error) {
 	p = &Pair{}
