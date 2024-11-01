@@ -71,12 +71,6 @@ func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {
 const F_SETPIPE_SZ = 1031
 const F_GETPIPE_SZ = 1032
 
-func osPipe() (int, int, error) {
-	var fds [2]int
-	err := syscall.Pipe2(fds[:], syscall.O_NONBLOCK)
-	return fds[0], fds[1], err
-}
-
 func newSplicePair() (p *Pair, err error) {
 	p = &Pair{}
 	p.r, p.w, err = osPipe()
