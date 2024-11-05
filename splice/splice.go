@@ -60,14 +60,6 @@ func init() {
 	devNullFD = uintptr(fd)
 }
 
-// copy & paste from syscall.
-func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {
-	r0, _, e1 := syscall.Syscall(syscall.SYS_FCNTL, fd, uintptr(cmd), uintptr(arg))
-	val = int(r0)
-	errno = syscall.Errno(e1)
-	return
-}
-
 const F_SETPIPE_SZ = 1031
 const F_GETPIPE_SZ = 1032
 
