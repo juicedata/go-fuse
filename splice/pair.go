@@ -6,7 +6,6 @@ package splice
 
 import (
 	"fmt"
-	"syscall"
 )
 
 type Pair struct {
@@ -40,23 +39,6 @@ func (p *Pair) Grow(n int) error {
 
 func (p *Pair) Cap() int {
 	return p.size
-}
-
-func (p *Pair) Close() error {
-	err1 := syscall.Close(p.r)
-	err2 := syscall.Close(p.w)
-	if err1 != nil {
-		return err1
-	}
-	return err2
-}
-
-func (p *Pair) Read(d []byte) (n int, err error) {
-	return syscall.Read(p.r, d)
-}
-
-func (p *Pair) Write(d []byte) (n int, err error) {
-	return syscall.Write(p.w, d)
 }
 
 func (p *Pair) ReadFd() uintptr {

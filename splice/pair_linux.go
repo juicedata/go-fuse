@@ -53,3 +53,20 @@ func (p *Pair) discard() {
 		log.Panicf("splicing into /dev/null: %v (close R %d '%v', close W %d '%v')", err, p.r, errR, p.w, errW)
 	}
 }
+
+func (p *Pair) Close() error {
+	err1 := syscall.Close(p.r)
+	err2 := syscall.Close(p.w)
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+func (p *Pair) Read(d []byte) (n int, err error) {
+	return syscall.Read(p.r, d)
+}
+
+func (p *Pair) Write(d []byte) (n int, err error) {
+	return syscall.Write(p.w, d)
+}
