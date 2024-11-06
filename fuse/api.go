@@ -112,6 +112,11 @@ type ReadResult interface {
 	Done()
 }
 
+type ReadResultWithFd interface {
+	ReadResult
+	ReadFd() uintptr
+}
+
 type MountOptions struct {
 	AllowOther bool
 

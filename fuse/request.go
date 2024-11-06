@@ -36,7 +36,7 @@ type request struct {
 	// Output data.
 	status   Status
 	flatData []byte
-	fdData   *readResultFd
+	fdData   ReadResultWithFd
 	slices   [][]byte
 
 	// In case of read, keep read result here so we can call
