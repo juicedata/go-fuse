@@ -28,7 +28,7 @@ func (s *Server) setSplice() {
 //
 // This dance is neccessary because header and payload cannot be split across
 // two splices and we cannot seek in a pipe buffer.
-func (ms *Server) trySplice(header []byte, req *request, fdData ReadResultFd) error {
+func (ms *Server) trySplice(header []byte, req *request, fdData ReadResultWithFd) error {
 	// Get a pair of connected pipes
 	pair, err := splice.Get()
 	if err != nil {

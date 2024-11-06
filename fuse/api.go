@@ -112,7 +112,7 @@ type ReadResult interface {
 	Done()
 }
 
-type ReadResultFd interface {
+type ReadResultWithFd interface {
 	ReadResult
 	ReadFd() uintptr
 }
