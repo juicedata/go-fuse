@@ -30,10 +30,6 @@ func ReadResultData(b []byte) ReadResult {
 	return &readResultData{b}
 }
 
-func ReadResultFd(fd uintptr, off int64, sz int) ReadResult {
-	return &readResultFd{fd, off, sz}
-}
-
 // ReadResultFd is the read return for zero-copy file data.
 type readResultFd struct {
 	// Splice from the following file.

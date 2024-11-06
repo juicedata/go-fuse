@@ -396,7 +396,7 @@ func doRead(server *Server, req *request) {
 	}
 
 	req.readResult, req.status = server.fileSystem.Read(req.cancel, in, buf)
-	if fd, ok := req.readResult.(*readResultFd); ok {
+	if fd, ok := req.readResult.(ReadResultFd); ok {
 		req.fdData = fd
 		req.flatData = nil
 	} else if req.readResult != nil && req.status.Ok() {
