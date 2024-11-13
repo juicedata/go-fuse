@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"runtime"
 	"syscall"
 )
 
@@ -34,6 +35,9 @@ const DefaultPipeSize = 16 * 4096
 var devNullFD uintptr
 
 func init() {
+	if runtime.GOOS != "linux" {
+		return
+	}
 	content, err := ioutil.ReadFile("/proc/sys/fs/pipe-max-size")
 	if err != nil {
 		maxPipeSize = DefaultPipeSize
