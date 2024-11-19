@@ -656,6 +656,7 @@ func init() {
 		_OP_RENAME2:         unsafe.Sizeof(RenameIn{}),
 		_OP_LSEEK:           unsafe.Sizeof(LseekIn{}),
 		_OP_COPY_FILE_RANGE: unsafe.Sizeof(CopyFileRangeIn{}),
+		_OP_TMPFILE:         unsafe.Sizeof(CreateIn{}),
 	} {
 		operationHandlers[op].InputSize = sz
 		if sz > maxInputSize {
@@ -690,6 +691,7 @@ func init() {
 		_OP_NOTIFY_DELETE:         unsafe.Sizeof(NotifyInvalDeleteOut{}),
 		_OP_LSEEK:                 unsafe.Sizeof(LseekOut{}),
 		_OP_COPY_FILE_RANGE:       unsafe.Sizeof(WriteOut{}),
+		_OP_TMPFILE:               unsafe.Sizeof(CreateOut{}),
 	} {
 		operationHandlers[op].OutputSize = sz
 	}
@@ -797,6 +799,7 @@ func init() {
 		_OP_INTERRUPT:       doInterrupt,
 		_OP_COPY_FILE_RANGE: doCopyFileRange,
 		_OP_LSEEK:           doLseek,
+		_OP_TMPFILE:         doCreate,
 	} {
 		handler := v
 		operationHandlers[op].Func = func(s *Server, r *request) {
@@ -832,6 +835,7 @@ func init() {
 		_OP_GETLK:                 func(ptr unsafe.Pointer) interface{} { return (*LkOut)(ptr) },
 		_OP_LSEEK:                 func(ptr unsafe.Pointer) interface{} { return (*LseekOut)(ptr) },
 		_OP_COPY_FILE_RANGE:       func(ptr unsafe.Pointer) interface{} { return (*WriteOut)(ptr) },
+		_OP_TMPFILE:               func(ptr unsafe.Pointer) interface{} { return (*CreateOut)(ptr) },
 	} {
 		operationHandlers[op].DecodeOut = f
 	}
@@ -871,6 +875,7 @@ func init() {
 		_OP_INTERRUPT:       func(ptr unsafe.Pointer) interface{} { return (*InterruptIn)(ptr) },
 		_OP_LSEEK:           func(ptr unsafe.Pointer) interface{} { return (*LseekIn)(ptr) },
 		_OP_COPY_FILE_RANGE: func(ptr unsafe.Pointer) interface{} { return (*CopyFileRangeIn)(ptr) },
+		_OP_TMPFILE:         func(ptr unsafe.Pointer) interface{} { return (*CreateIn)(ptr) },
 	} {
 		operationHandlers[op].DecodeIn = f
 	}
@@ -890,6 +895,7 @@ func init() {
 		_OP_RMDIR:       1,
 		_OP_SYMLINK:     2,
 		_OP_UNLINK:      1,
+		_OP_TMPFILE:     1,
 	} {
 		operationHandlers[op].FileNames = count
 	}
