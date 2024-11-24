@@ -49,6 +49,7 @@ var (
 		CAP_CREATE_SUPP_GROUP: "CREATE_SUPP_GROUP",
 		CAP_HAS_EXPIRE_ONLY:   "HAS_EXPIRE_ONLY",
 		CAP_DIRECT_IO_RELAX:   "DIRECT_IO_RELAX",
+		CAP_ALLOW_IDMAP:       "ALLOW_IDMAP",
 	})
 	releaseFlagNames = newFlagNames(map[int64]string{
 		RELEASE_FLUSH: "FLUSH",
