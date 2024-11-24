@@ -307,6 +307,7 @@ const (
 	CAP_CREATE_SUPP_GROUP = (1 << 34)
 	CAP_HAS_EXPIRE_ONLY   = (1 << 35)
 	CAP_DIRECT_IO_RELAX   = (1 << 36)
+	CAP_ALLOW_IDMAP       = (1 << 40)
 )
 
 type InitIn struct {
