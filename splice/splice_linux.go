@@ -1,6 +1,9 @@
 package splice
 
-import "syscall"
+import (
+	"log"
+	"syscall"
+)
 
 // copy & paste from syscall.
 func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {
@@ -10,8 +13,29 @@ func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {
 	return
 }
 
-func osPipe() (int, int, error) {
+func newPipe() *Pair {
 	var fds [2]int
-	err := syscall.Pipe2(fds[:], syscall.O_NONBLOCK)
-	return fds[0], fds[1], err
+	var err error
+	err = syscall.Pipe2(fds[:], syscall.O_CLOEXEC|syscall.O_NONBLOCK)
+	if err != nil {
+		log.Printf("Warning: create pipe failed: %v\n", err)
+		return nil
+	}
+	if resizable {
+		_, ferr := fcntl(uintptr(fds[0]), syscall.F_SETPIPE_SZ, maxPipeSize)
+		if ferr != syscall.Errno(0) {
+			syscall.Close(fds[0])
+			syscall.Close(fds[1])
+			log.Printf("Warning: grow pipe failed: %v\n", ferr)
+			return nil
+		}
+	}
+	return &Pair{r: fds[0], w: fds[1], size: maxPipeSize}
+}
+
+func destroyPipe(p *Pair) {
+	err := p.close()
+	if err != nil {
+		log.Printf("close pipe failed: %v\n", err)
+	}
 }

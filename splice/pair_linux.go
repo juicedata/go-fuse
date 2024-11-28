@@ -65,7 +65,7 @@ func (p *Pair) discard() {
 	}
 }
 
-func (p *Pair) Close() error {
+func (p *Pair) close() error {
 	err1 := syscall.Close(p.r)
 	err2 := syscall.Close(p.w)
 	if err1 != nil {

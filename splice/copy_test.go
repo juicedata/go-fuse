@@ -56,15 +56,13 @@ func TestSpliceCopy(t *testing.T) {
 	if maxPipeSize%4096 != 0 || maxPipeSize < 4096 {
 		t.Error("pipe size should be page size multiple", maxPipeSize)
 	}
-	pool := newSplicePairPool()
-	p, err := pool.get()
+	p, err := Get()
 	if p != nil {
 		p.MaxGrow()
 		t.Logf("Splice size %d", p.size)
 		SpliceCopy(dst, src, p)
 		dst.Close()
 		src.Close()
-		p.Close()
 	} else {
 		t.Error("Could not open splice: ", err)
 	}

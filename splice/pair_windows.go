@@ -20,7 +20,7 @@ func (p *Pair) discard() {
 	panic("not implemented")
 }
 
-func (p *Pair) Close() error {
+func (p *Pair) close() error {
 	panic("not implemented")
 }
 

@@ -5,10 +5,25 @@
 package splice
 
 import (
+	"fmt"
+	"runtime"
 	"sync"
 )
 
-var splicePool *pairPool
+var splicePool = sync.Pool{
+	New: newPoolPipe,
+}
+
+func newPoolPipe() interface{} {
+	// Discard the error which occurred during the creation of pipe buffer,
+	// redirecting the data transmission to the conventional way utilizing read() + write() as a fallback.
+	p := newPipe()
+	if p == nil {
+		return nil
+	}
+	runtime.SetFinalizer(p, destroyPipe)
+	return p
+}
 
 type pairPool struct {
 	sync.Mutex
@@ -16,90 +31,22 @@ type pairPool struct {
 	usedCount int
 }
 
-func ClearSplicePool() {
-	splicePool.clear()
-}
-
 func Get() (*Pair, error) {
-	return splicePool.get()
-}
-
-func Total() int {
-	return splicePool.total()
-}
-
-func Used() int {
-	return splicePool.used()
+	p := splicePool.Get()
+	if p == nil {
+		return nil, fmt.Errorf("create pipe failed")
+	}
+	return p.(*Pair), nil
 }
 
 // Done returns the pipe pair to pool.
 func Done(p *Pair) {
-	splicePool.done(p)
+	p.discard()
+	splicePool.Put(p)
 }
 
 // Closes and discards pipe pair.
 func Drop(p *Pair) {
-	splicePool.drop(p)
-}
-
-func newSplicePairPool() *pairPool {
-	return &pairPool{}
-}
-
-func (pp *pairPool) clear() {
-	pp.Lock()
-	for _, p := range pp.unused {
-		p.Close()
-	}
-	pp.unused = pp.unused[:0]
-	pp.Unlock()
-}
-
-func (pp *pairPool) used() (n int) {
-	pp.Lock()
-	n = pp.usedCount
-	pp.Unlock()
-
-	return n
-}
-
-func (pp *pairPool) total() int {
-	pp.Lock()
-	n := pp.usedCount + len(pp.unused)
-	pp.Unlock()
-	return n
-}
-
-func (pp *pairPool) drop(p *Pair) {
-	p.Close()
-	pp.Lock()
-	pp.usedCount--
-	pp.Unlock()
-}
-
-func (pp *pairPool) get() (p *Pair, err error) {
-	pp.Lock()
-	defer pp.Unlock()
-
-	pp.usedCount++
-	l := len(pp.unused)
-	if l > 0 {
-		p := pp.unused[l-1]
-		pp.unused = pp.unused[:l-1]
-		return p, nil
-	}
-
-	return newSplicePair()
-}
-
-func (pp *pairPool) done(p *Pair) {
-	p.discard()
-	pp.Lock()
-	pp.usedCount--
-	pp.unused = append(pp.unused, p)
-	pp.Unlock()
-}
-
-func init() {
-	splicePool = newSplicePairPool()
+	runtime.SetFinalizer(p, nil)
+	destroyPipe(p)
 }
