@@ -54,11 +54,11 @@ func CopyFile(dstName string, srcName string, mode int) error {
 }
 
 func CopyFds(dst *os.File, src *os.File) (err error) {
-	p, err := splicePool.get()
+	p, err := Get()
 	if p != nil {
 		p.Grow(256 * 1024)
 		_, err := SpliceCopy(dst, src, p)
-		splicePool.done(p)
+		Done(p)
 		return err
 	} else {
 		_, err = io.Copy(dst, src)

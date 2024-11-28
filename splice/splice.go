@@ -66,22 +66,3 @@ func init() {
 
 const F_SETPIPE_SZ = 1031
 const F_GETPIPE_SZ = 1032
-
-func newSplicePair() (p *Pair, err error) {
-	p = &Pair{}
-	p.r, p.w, err = osPipe()
-	if err != nil {
-		return nil, err
-	}
-	var errNo syscall.Errno
-	p.size, errNo = fcntl(uintptr(p.r), F_GETPIPE_SZ, 0)
-	if errNo == syscall.EINVAL {
-		p.size = DefaultPipeSize
-		return p, nil
-	}
-	if errNo != 0 {
-		p.Close()
-		return nil, fmt.Errorf("fcntl getsize: %v", errNo)
-	}
-	return p, nil
-}

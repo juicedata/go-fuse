@@ -1,12 +1,15 @@
 package splice
 
 import (
-	"fmt"
 	"syscall"
 )
 
-func osPipe() (int, int, error) {
-	return 0, 0, fmt.Errorf("not implemented")
+func newPipe() *Pair {
+	return nil
+}
+
+func destroyPipe(p *Pair) {
+	panic("not implemented")
 }
 
 func fcntl(fd uintptr, cmd int, arg int) (val int, errno syscall.Errno) {

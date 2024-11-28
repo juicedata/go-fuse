@@ -11,6 +11,10 @@ import (
 type Pair struct {
 	r, w int
 	size int
+
+	// We want to use a finalizer, so ensure that the size is
+	// large enough to not use the tiny allocator.
+	_ [12]byte
 }
 
 func (p *Pair) MaxGrow() {
