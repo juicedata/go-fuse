@@ -21,7 +21,15 @@ func newPipe() *Pair {
 		log.Printf("Warning: create pipe failed: %v\n", err)
 		return nil
 	}
-	fcntl(uintptr(fds[0]), syscall.F_SETPIPE_SZ, maxPipeSize)
+	if resizable {
+		_, ferr := fcntl(uintptr(fds[0]), syscall.F_SETPIPE_SZ, maxPipeSize)
+		if ferr != syscall.Errno(0) {
+			syscall.Close(fds[0])
+			syscall.Close(fds[1])
+			log.Printf("Warning: grow pipe failed: %v\n", ferr)
+			return nil
+		}
+	}
 	return &Pair{r: fds[0], w: fds[1], size: maxPipeSize}
 }
 
