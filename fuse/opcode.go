@@ -286,8 +286,11 @@ func doGetXAttr(server *Server, req *request) {
 
 	if server.opts.IgnoreSecurityLabels && req.inHeader.Opcode == _OP_GETXATTR {
 		fn := req.filenames[0]
-		if fn == _SECURITY_CAPABILITY || fn == _SECURITY_ACL_DEFAULT ||
-			fn == _SECURITY_ACL {
+		if fn == _SECURITY_CAPABILITY {
+			req.status = ENOATTR
+			return
+		}
+		if !server.opts.EnableAcl && (fn == _SECURITY_ACL_DEFAULT || fn == _SECURITY_ACL) {
 			req.status = ENOATTR
 			return
 		}
