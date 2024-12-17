@@ -469,6 +469,7 @@ func RenameOpenDir(t *testing.T, mnt string) {
 // ReadDir creates 110 files one by one, checking that we get the expected
 // entries after each file creation.
 func ReadDir(t *testing.T, mnt string) {
+	fmt.Println(mnt)
 	want := map[string]bool{}
 	// 40 bytes of filename, so 110 entries overflows a
 	// 4096 page.
@@ -497,12 +498,12 @@ func ReadDir(t *testing.T, mnt string) {
 		}
 		for k := range got {
 			if !want[k] {
-				t.Errorf("got extra entry %q", k)
+				t.Errorf("got extra entry %q", filepath.Join(mnt, k))
 			}
 		}
 		for k := range want {
 			if !got[k] {
-				t.Errorf("missing entry %q", k)
+				t.Errorf("missing entry %q", filepath.Join(mnt, k))
 			}
 		}
 	}
