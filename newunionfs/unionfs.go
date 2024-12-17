@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"path/filepath"
+	"sort"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -369,6 +370,9 @@ func (n *unionFSNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		result = append(result[maxIdx:], result[:maxIdx]...)
 	}
 
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return fs.NewListDirStream(result), 0
 }
 
