@@ -559,6 +559,7 @@ func doInterrupt(server *Server, req *request) {
 				close(inflight.cancel)
 				inflight.interrupted = true
 			}
+			break
 		}
 	}
 
