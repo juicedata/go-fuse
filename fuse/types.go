@@ -300,6 +300,7 @@ const (
 	CAP_ABORT_ERROR      = (1 << 21)
 	CAP_MAX_PAGES        = (1 << 22)
 	CAP_CACHE_SYMLINKS   = (1 << 23)
+	CAP_INIT_EXT         = (1 << 30) // Linux only: enables Flags2.
 
 	/* bits 32..63 get shifted down 32 bits into the Flags2 field */
 	CAP_SECURITY_CTX      = (1 << 32)

@@ -127,6 +127,11 @@ func doInit(server *Server, req *request) {
 	} else if server.opts.EnableReadDirPlusAuto {
 		server.kernelSettings.Flags |= CAP_READDIRPLUS_AUTO
 	}
+	server.kernelSettings.Flags2 = 0
+	if server.opts.IDMappedMount && input.Flags&CAP_INIT_EXT != 0 && input.Flags2&(CAP_ALLOW_IDMAP>>32) != 0 {
+		server.kernelSettings.Flags |= CAP_INIT_EXT
+		server.kernelSettings.Flags2 = CAP_ALLOW_IDMAP >> 32
+	}
 
 	if server.opts.EnableWriteback {
 		server.kernelSettings.Flags |= CAP_WRITEBACK_CACHE
@@ -160,6 +165,7 @@ func doInit(server *Server, req *request) {
 		Minor:               _OUR_MINOR_VERSION,
 		MaxReadAhead:        input.MaxReadAhead,
 		Flags:               server.kernelSettings.Flags,
+		Flags2:              server.kernelSettings.Flags2,
 		MaxWrite:            uint32(server.opts.MaxWrite),
 		CongestionThreshold: uint16(server.opts.MaxBackground * 3 / 4),
 		MaxBackground:       uint16(server.opts.MaxBackground),
