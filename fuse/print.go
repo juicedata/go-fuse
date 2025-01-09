@@ -221,7 +221,7 @@ func (in *InitIn) string() string {
 func (o *InitOut) string() string {
 	return fmt.Sprintf("{%d.%d Ra %d %s %d/%d Wr %d Tg %d MaxPages %d}",
 		o.Major, o.Minor, o.MaxReadAhead,
-		flagString(initFlagNames, int64(o.Flags), ""),
+		flagString(initFlagNames, int64(o.Flags)|(int64(o.Flags2)<<32), ""),
 		o.CongestionThreshold, o.MaxBackground, o.MaxWrite,
 		o.TimeGran, o.MaxPages)
 }
