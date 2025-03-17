@@ -699,7 +699,9 @@ func (ms *Server) Shutdown() bool {
 		}
 		if time.Since(start) > time.Second*3 {
 			ms.reqMu.Lock()
-			log.Printf("interrupt %d inflight requests", len(ms.reqInflight))
+			if len(ms.reqInflight) > 0 {
+				log.Printf("interrupt %d inflight requests", len(ms.reqInflight))
+			}
 			for _, req := range ms.reqInflight {
 				if !req.interrupted {
 					close(req.cancel)
