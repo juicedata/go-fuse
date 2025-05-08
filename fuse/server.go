@@ -654,12 +654,13 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 			for j := 0; j < batch && i+j < len(ms.reqInflight); j++ {
 				req := ms.reqInflight[i+j]
 				used := now.Sub(req.startTime)
+				opcode := req.inHeader.Opcode
 				if req.interrupted && used > timeout/10 {
 					unique := req.inHeader.Unique
 					ms.reqMu.Unlock()
 					ms.returnInterrupted(unique)
 					ms.reqMu.Lock()
-				} else if !req.interrupted && (used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique) {
+				} else if !req.interrupted && ((used > timeout && opcode != _OP_SETLKW) || req.inHeader.Unique+5.5e6 < ms.maxUnique) {
 					log.Printf("interrupt request %d after %s: %+v", req.inHeader.Unique, used, req.inHeader)
 					req.interrupted = true
 					close(req.cancel)
