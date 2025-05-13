@@ -241,7 +241,12 @@ func lookPathFallback(file string, fallbackDir string) (string, error) {
 	return exec.LookPath(abs)
 }
 
+// fusermountBinary returns the path to the `fusermount3` binary, or, if not
+// found, the `fusermount` binary.
 func fusermountBinary() (string, error) {
+	if path, err := lookPathFallback("fusermount3", "/bin"); err == nil {
+		return path, nil
+	}
 	return lookPathFallback("fusermount", "/bin")
 }
 
