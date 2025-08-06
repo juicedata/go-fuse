@@ -288,6 +288,9 @@ type MountOptions struct {
 	// ReadDir, as no per-file stat calls are needed
 	DisableReadDirPlus bool
 
+	// Allow control of adaptive readdirplus use.
+	EnableReadDirPlusAuto bool
+
 	// EnableWriteback enables kernel writeback cache.
 	EnableWriteback bool
 

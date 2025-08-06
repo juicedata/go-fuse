@@ -124,6 +124,8 @@ func doInit(server *Server, req *request) {
 	if server.opts.DisableReadDirPlus {
 		// Clear CAP_READDIRPLUS
 		server.kernelSettings.Flags &= ^uint32(CAP_READDIRPLUS)
+	} else if server.opts.EnableReadDirPlusAuto {
+		server.kernelSettings.Flags |= CAP_READDIRPLUS_AUTO
 	}
 
 	if server.opts.EnableWriteback {
