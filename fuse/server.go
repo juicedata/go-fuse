@@ -661,9 +661,12 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 					ms.returnInterrupted(unique)
 					ms.reqMu.Lock()
 				} else if !req.interrupted && ((used > timeout && opcode != _OP_SETLKW) || req.inHeader.Unique+5.5e6 < ms.maxUnique) {
-					log.Printf("interrupt request %d after %s: %+v", req.inHeader.Unique, used, req.inHeader)
+					log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, ms.maxUnique, used, timeout, req.inHeader)
 					req.interrupted = true
 					close(req.cancel)
+					if req.inHeader.Unique+5.5e6 < ms.maxUnique {
+						ms.maxUnique = req.inHeader.Unique
+					}
 				}
 			}
 			ms.reqMu.Unlock()
