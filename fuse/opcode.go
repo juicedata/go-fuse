@@ -347,11 +347,15 @@ func doForget(server *Server, req *request) {
 // doBatchForget - forget a list of NodeIds
 func doBatchForget(server *Server, req *request) {
 	in := (*_BatchForgetIn)(req.inData)
-	wantBytes := uintptr(in.Count) * unsafe.Sizeof(_ForgetOne{})
-	if uintptr(len(req.arg)) < wantBytes {
+	gotCount := len(req.arg) / int(unsafe.Sizeof(_ForgetOne{}))
+	if int(in.Count) > gotCount {
 		// We have no return value to complain, so log an error.
-		server.opts.Logger.Printf("Too few bytes for batch forget. Got %d bytes, want %d (%d entries)",
-			len(req.arg), wantBytes, in.Count)
+		server.opts.Logger.Printf("Too few bytes for batch forget. Got %d bytes enough for %d entries (want %d entries)",
+			len(req.arg), gotCount, in.Count)
+	}
+	in.Count = uint32(gotCount)
+	if in.Count == 0 {
+		return
 	}
 
 	h := &reflect.SliceHeader{
