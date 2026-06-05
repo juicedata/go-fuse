@@ -556,6 +556,7 @@ func (ms *Server) Wait() {
 }
 
 func (ms *Server) wakeupReader() {
+	time.Sleep(10 * time.Second)
 	cmd := exec.Command("df", ms.mountPoint)
 	_ = cmd.Run()
 }
@@ -622,6 +623,7 @@ func (ms *Server) Shutdown() bool {
 		}
 	}
 	ms.reqMu.Unlock()
+	time.Sleep(11 * time.Second)
 	return true
 }
 
