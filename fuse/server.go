@@ -627,6 +627,8 @@ func (ms *Server) Serve() {
 	ms.writeMu.Lock()
 	syscall.Close(ms.mountFd)
 	ms.writeMu.Unlock()
+
+	time.Sleep(11 * time.Second)
 }
 
 // Wait waits for the serve loop to exit. This should only be called
