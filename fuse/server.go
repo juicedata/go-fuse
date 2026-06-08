@@ -628,7 +628,9 @@ func (ms *Server) Serve() {
 	syscall.Close(ms.mountFd)
 	ms.writeMu.Unlock()
 
+	log.Println("MOCK: serve begin")
 	time.Sleep(11 * time.Second)
+	log.Println("MOCK: Serve done")
 }
 
 // Wait waits for the serve loop to exit. This should only be called
@@ -638,9 +640,11 @@ func (ms *Server) Wait() {
 }
 
 func (ms *Server) wakeupReader() {
+	log.Println("MOCK: sleep wakeupReader begin")
 	time.Sleep(10 * time.Second)
+	log.Println("MOCK: sleep wakeupReader done")
 	cmd := exec.Command("df", ms.mountPoint)
-	_ = cmd.Run()
+	_ = cmd.Start()
 }
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
