@@ -479,7 +479,6 @@ func (ms *Server) checkLostRequests() {
 		// issue a few requests to interrupt lost ones
 		for i := 0; i < 30; i++ {
 			ms.wakeupReader()
-			time.Sleep(time.Millisecond * 100)
 		}
 	}()
 	start := time.Now()
@@ -627,10 +626,6 @@ func (ms *Server) Serve() {
 	ms.writeMu.Lock()
 	syscall.Close(ms.mountFd)
 	ms.writeMu.Unlock()
-
-	log.Println("MOCK: serve begin")
-	time.Sleep(11 * time.Second)
-	log.Println("MOCK: Serve done")
 }
 
 // Wait waits for the serve loop to exit. This should only be called
@@ -640,11 +635,8 @@ func (ms *Server) Wait() {
 }
 
 func (ms *Server) wakeupReader() {
-	log.Println("MOCK: sleep wakeupReader begin")
-	time.Sleep(10 * time.Second)
-	log.Println("MOCK: sleep wakeupReader done")
 	cmd := exec.Command("df", ms.mountPoint)
-	_ = cmd.Start()
+	_ = cmd.Run()
 }
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
