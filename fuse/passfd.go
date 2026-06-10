@@ -30,7 +30,7 @@ func getFd(via *net.UnixConn, num int) ([]byte, []int, error) {
 	// recvmsg
 	msg := make([]byte, syscall.CmsgSpace(100))
 	buf := make([]byte, syscall.CmsgSpace(num*4))
-	_, _, _, _, err = syscall.Recvmsg(socket, msg, buf, 0)
+	_, _, _, _, err = syscall.Recvmsg(socket, msg, buf, MSG_CMSG_CLOEXEC)
 	if err != nil {
 		return nil, nil, err
 	}
