@@ -10,6 +10,8 @@ import (
 	"unsafe"
 )
 
+const MSG_CMSG_CLOEXEC = syscall.MSG_CMSG_CLOEXEC
+
 // TODO - move these into Go's syscall package.
 
 func sys_writev(fd int, iovecs *syscall.Iovec, cnt int) (n int, err error) {
