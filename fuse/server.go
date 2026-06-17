@@ -58,7 +58,7 @@ type Server struct {
 	opts *MountOptions
 
 	// maxReaders is the maximum number of goroutines reading requests
-	maxReaders int
+	maxReaders int32
 	maxUnique  uint64
 
 	// Pools for []byte
@@ -70,7 +70,7 @@ type Server struct {
 	// Pool for raw requests data
 	readPool       sync.Pool
 	reqMu          sync.Mutex
-	reqReaders     int
+	reqReaders     atomic.Int32
 	reqInflight    []*request
 	recentUnique   []uint64
 	kernelSettings InitIn
@@ -83,8 +83,8 @@ type Server struct {
 	singleReader bool
 	canSplice    bool
 	loops        sync.WaitGroup
-	writes       int64
-	shutdown     bool
+	writes       atomic.Int64
+	shutdown     atomic.Bool
 
 	ready chan error
 
@@ -203,10 +203,16 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		maxReaders = maxMaxReaders
 	}
 
+	if tmp := os.Getenv("JFS_FUSE_MAX_READERS"); tmp != "" {
+		if v, err := strconv.ParseInt(tmp, 10, 32); err == nil {
+			maxReaders = int(v)
+		}
+	}
+
 	ms := &Server{
 		fileSystem:  fs,
 		opts:        &o,
-		maxReaders:  maxReaders,
+		maxReaders:  int32(maxReaders),
 		retrieveTab: make(map[uint64]*retrieveCacheRequest),
 		// OSX has races when multiple routines read from the
 		// FUSE device: on unmount, sometime some reads do not
@@ -359,11 +365,7 @@ func (o *MountOptions) optionsStrings() []string {
 // DebugData returns internal status information for debugging
 // purposes.
 func (ms *Server) DebugData() string {
-	var r int
-	ms.reqMu.Lock()
-	r = ms.reqReaders
-	ms.reqMu.Unlock()
-
+	r := ms.reqReaders.Load()
 	return fmt.Sprintf("readers: %d", r)
 }
 
@@ -389,22 +391,17 @@ func handleEINTR(fn func() error) (err error) {
 // Returns a new request, or error. In case exitIdle is given, returns
 // nil, OK if we have too many readers already.
 func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
-	ms.reqMu.Lock()
 	if exitIdle {
-		if ms.shutdown || ms.reqReaders >= ms.maxReaders {
-			ms.reqMu.Unlock()
+		if ms.shutdown.Load() || ms.reqReaders.Load() >= ms.maxReaders {
 			return nil, OK
 		}
 	} else {
 		// main thread, don't exit for restart
-		for ms.shutdown {
-			ms.reqMu.Unlock()
+		for ms.shutdown.Load() {
 			time.Sleep(time.Millisecond)
-			ms.reqMu.Lock()
 		}
 	}
-	ms.reqReaders++
-	ms.reqMu.Unlock()
+	ms.reqReaders.Add(1)
 
 	dest := ms.readPool.Get().([]byte)
 
@@ -417,9 +414,7 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	if err != nil {
 		code = ToStatus(err)
 		ms.readPool.Put(dest)
-		ms.reqMu.Lock()
-		ms.reqReaders--
-		ms.reqMu.Unlock()
+		ms.reqReaders.Add(-1)
 		return nil, code
 	}
 
@@ -430,11 +425,11 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 		ms.readPool.Put(dest)
 	}
 
+	reqcnt := ms.reqReaders.Add(-1)
 	ms.reqMu.Lock()
-	defer ms.reqMu.Unlock()
-	ms.reqReaders--
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
+		ms.reqMu.Unlock()
 		return nil, status
 	}
 	if ms.recentUnique != nil {
@@ -445,8 +440,9 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	}
 	req.inflightIndex = len(ms.reqInflight)
 	ms.reqInflight = append(ms.reqInflight, req)
+	ms.reqMu.Unlock()
 
-	if !ms.singleReader && ms.reqReaders < 2 && ms.reqReaders < ms.maxReaders && !ms.shutdown {
+	if !ms.singleReader && reqcnt < 2 && reqcnt < ms.maxReaders && !ms.shutdown.Load() {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
@@ -486,12 +482,11 @@ func (ms *Server) checkLostRequests() {
 	var recentUnique []uint64
 	time.Sleep(time.Second * 3)
 	for {
-		ms.reqMu.Lock()
-		if ms.shutdown {
-			ms.reqMu.Unlock()
+		if ms.shutdown.Load() {
 			return
 		}
 		used := time.Since(start)
+		ms.reqMu.Lock()
 		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
 			recentUnique = ms.recentUnique
 			ms.recentUnique = nil
@@ -663,7 +658,7 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 		for i := 0; ; i += batch {
 			now := time.Now()
 			ms.reqMu.Lock()
-			if ms.shutdown || i >= len(ms.reqInflight) {
+			if ms.shutdown.Load() || i >= len(ms.reqInflight) {
 				ms.reqMu.Unlock()
 				break
 			}
@@ -693,41 +688,33 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 func (ms *Server) Shutdown() bool {
 	log.Printf("try to restart gracefully")
 	start := time.Now()
+	ms.shutdown.Store(true)
 	ms.reqMu.Lock()
-	ms.shutdown = true
-	readers := ms.reqReaders
 	reqs := len(ms.reqInflight)
 	ms.reqMu.Unlock()
 
-	for readers > 0 || reqs > 0 || atomic.LoadInt64(&ms.writes) > 0 {
-		if readers > 0 {
+	for ms.reqReaders.Load() > 0 || reqs > 0 || ms.writes.Load() > 0 {
+		if ms.reqReaders.Load() > 0 {
 			go ms.wakeupReader()
-		} else if atomic.LoadInt64(&ms.writes) > 0 {
+		} else if ms.writes.Load() > 0 {
 			// the write could be blocked by FUSE requests, let's process them
 			time.Sleep(time.Millisecond * 100)
 			// double check
-			if n := atomic.LoadInt64(&ms.writes); n > 0 {
+			if n := ms.writes.Load(); n > 0 {
 				log.Printf("restore process for %d writes", n)
-				ms.reqMu.Lock()
-				ms.shutdown = false
-				ms.reqMu.Unlock()
+				ms.shutdown.Store(false)
 				time.Sleep(time.Millisecond * 100)
-				ms.reqMu.Lock()
-				ms.shutdown = true
-				ms.reqMu.Unlock()
+				ms.shutdown.Store(true)
 			}
 		}
 		if time.Since(start) > time.Second*10 {
 			log.Printf("FUSE session is still busy (%d readers, %d requests, %d writers) after 10 seconds, give up",
-				readers, reqs, atomic.LoadInt64(&ms.writes))
-			ms.reqMu.Lock()
-			ms.shutdown = false
-			ms.reqMu.Unlock()
+				ms.reqReaders.Load(), reqs, ms.writes.Load())
+			ms.shutdown.Store(false)
 			return false
 		}
 		time.Sleep(time.Millisecond * 10)
 		ms.reqMu.Lock()
-		readers = ms.reqReaders
 		reqs = len(ms.reqInflight)
 		ms.reqMu.Unlock()
 	}
@@ -888,18 +875,16 @@ func (ms *Server) write(req *request) Status {
 		return OK
 	}
 
-	atomic.AddInt64(&ms.writes, 1)
+	ms.writes.Add(1)
 	defer func() {
-		atomic.AddInt64(&ms.writes, -1)
+		ms.writes.Add(-1)
 	}()
 	s := ms.systemWrite(req, header)
 	return s
 }
 
 func (ms *Server) isShutdown() bool {
-	ms.reqMu.Lock()
-	defer ms.reqMu.Unlock()
-	return ms.shutdown
+	return ms.shutdown.Load()
 }
 
 // InodeNotify invalidates the information associated with the inode
