@@ -166,6 +166,9 @@ func doInit(server *Server, req *request) {
 		MaxPages:            uint16(maxPages),
 	}
 
+	// Negotiate FUSE passthrough (Linux-only; no-op elsewhere).
+	negotiatePassthrough(server, input, out)
+
 	if server.opts.MaxReadAhead != 0 && uint32(server.opts.MaxReadAhead) < out.MaxReadAhead {
 		out.MaxReadAhead = uint32(server.opts.MaxReadAhead)
 	}
