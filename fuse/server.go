@@ -561,8 +561,10 @@ func (ms *Server) returnRequest(req *request) {
 	}
 
 	if req.bufferPoolOutputBuf != nil {
-		ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		//ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		req.bufferOutPool.Put(req.bufferPoolOutputBuf)
 		req.bufferPoolOutputBuf = nil
+		req.bufferOutPool = nil
 	}
 
 	req.clear()
@@ -846,12 +848,14 @@ func (ms *Server) allocOut(req *request, size uint32) []byte {
 		return req.bufferPoolOutputBuf
 	}
 	if req.bufferPoolOutputBuf != nil {
-		ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		//ms.buffers.FreeBuffer(req.bufferPoolOutputBuf)
+		req.bufferOutPool.Put(req.bufferPoolOutputBuf)
 		req.bufferPoolOutputBuf = nil
+		req.bufferOutPool = nil
 	}
 	// As this allocated a multiple of the page size, very likely
 	// this is aligned to logicalBlockSize too, which is smaller.
-	req.bufferPoolOutputBuf = ms.buffers.AllocBuffer(size)
+	req.bufferPoolOutputBuf, req.bufferOutPool = ms.buffers.AllocBuffer(size)
 	return req.bufferPoolOutputBuf
 }
 
