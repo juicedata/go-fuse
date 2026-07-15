@@ -99,7 +99,7 @@ func doInit(server *Server, req *request) {
 		return
 	}
 
-	server.reqMu.Lock()
+	server.readMu.Lock()
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
 		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS | CAP_MAX_PAGES | CAP_RENAME_SWAP | CAP_EXPORT_SUPPORT | server.opts.OtherCaps)
@@ -152,7 +152,7 @@ func doInit(server *Server, req *request) {
 	// memory pages (usually 4kiB). Linux v4.19 and older ignore this and always use
 	// 128kiB.
 	maxPages := (server.opts.MaxWrite-1)/syscall.Getpagesize() + 1 // Round up
-	server.reqMu.Unlock()
+	server.readMu.Unlock()
 
 	out := (*InitOut)(req.outData())
 	*out = InitOut{
@@ -553,9 +553,10 @@ func doCopyFileRange(server *Server, req *request) {
 
 func doInterrupt(server *Server, req *request) {
 	input := (*InterruptIn)(req.inData)
-	defer server.reqMu.Unlock()
-	server.reqMu.Lock()
-	for _, inflight := range server.reqInflight {
+	shard := server.reqShard(input.Unique)
+	defer shard.Unlock()
+	shard.Lock()
+	for _, inflight := range shard.reqs {
 		if input.Unique == inflight.inHeader.Unique {
 			if !inflight.interrupted {
 				close(inflight.cancel)

@@ -42,6 +42,13 @@ const (
 
 // Server contains the logic for reading from the FUSE device and
 // translating it to RawFileSystem interface calls.
+const REQINFLIGHT_SHARD = 8
+
+type requestInflight struct {
+	sync.Mutex
+	reqs []*request
+}
+
 type Server struct {
 	// Empty if unmounted.
 	mountPoint string
@@ -59,7 +66,7 @@ type Server struct {
 
 	// maxReaders is the maximum number of goroutines reading requests
 	maxReaders int32
-	maxUnique  uint64
+	maxUnique  atomic.Uint64
 
 	// Pools for []byte
 	buffers bufferPool
@@ -69,9 +76,9 @@ type Server struct {
 
 	// Pool for raw requests data
 	readPool       sync.Pool
-	reqMu          sync.Mutex
+	readMu         sync.Mutex
 	reqReaders     atomic.Int32
-	reqInflight    []*request
+	reqInflight    [REQINFLIGHT_SHARD]*requestInflight
 	recentUnique   []uint64
 	kernelSettings InitIn
 
@@ -92,6 +99,20 @@ type Server struct {
 	requestProcessingMu sync.Mutex
 }
 
+func (ms *Server) reqShard(unique uint64) *requestInflight {
+	return ms.reqInflight[unique&(REQINFLIGHT_SHARD-1)]
+}
+
+func (ms *Server) reqLen() int {
+	var total int
+	for _, shard := range ms.reqInflight {
+		shard.Lock()
+		total += len(shard.reqs)
+		shard.Unlock()
+	}
+	return total
+}
+
 // SetDebug is deprecated. Use MountOptions.Debug instead.
 func (ms *Server) SetDebug(dbg bool) {
 	// This will typically trigger the race detector.
@@ -102,9 +123,9 @@ func (ms *Server) SetDebug(dbg bool) {
 // filesystems can adapt to availability of features of the kernel
 // driver. The message should not be altered.
 func (ms *Server) KernelSettings() *InitIn {
-	ms.reqMu.Lock()
+	ms.readMu.Lock()
 	s := ms.kernelSettings
-	ms.reqMu.Unlock()
+	ms.readMu.Unlock()
 
 	return &s
 }
@@ -210,9 +231,14 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 	}
 
 	ms := &Server{
-		fileSystem:  fs,
-		opts:        &o,
-		maxReaders:  int32(maxReaders),
+		fileSystem: fs,
+		opts:       &o,
+		maxReaders: int32(maxReaders),
+		reqInflight: [REQINFLIGHT_SHARD]*requestInflight{
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{}},
 		retrieveTab: make(map[uint64]*retrieveCacheRequest),
 		// OSX has races when multiple routines read from the
 		// FUSE device: on unmount, sometime some reads do not
@@ -426,21 +452,25 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	}
 
 	reqcnt := ms.reqReaders.Add(-1)
-	ms.reqMu.Lock()
+	ms.readMu.Lock()
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
-		ms.reqMu.Unlock()
+		ms.readMu.Unlock()
 		return nil, status
 	}
 	if ms.recentUnique != nil {
 		ms.recentUnique = append(ms.recentUnique, req.inHeader.Unique)
 	}
-	if req.inHeader.Unique > ms.maxUnique {
-		ms.maxUnique = req.inHeader.Unique
+	if req.inHeader.Unique > ms.maxUnique.Load() {
+		ms.maxUnique.Store(req.inHeader.Unique)
 	}
-	req.inflightIndex = len(ms.reqInflight)
-	ms.reqInflight = append(ms.reqInflight, req)
-	ms.reqMu.Unlock()
+	ms.readMu.Unlock()
+
+	shard := ms.reqShard(req.inHeader.Unique)
+	shard.Lock()
+	req.inflightIndex = len(shard.reqs)
+	shard.reqs = append(shard.reqs, req)
+	shard.Unlock()
 
 	if !ms.singleReader && reqcnt < 2 && reqcnt < ms.maxReaders && !ms.shutdown.Load() {
 		ms.loops.Add(1)
@@ -486,14 +516,14 @@ func (ms *Server) checkLostRequests() {
 			return
 		}
 		used := time.Since(start)
-		ms.reqMu.Lock()
+		ms.readMu.Lock()
 		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
 			recentUnique = ms.recentUnique
 			ms.recentUnique = nil
-			ms.reqMu.Unlock()
+			ms.readMu.Unlock()
 			break
 		}
-		ms.reqMu.Unlock()
+		ms.readMu.Unlock()
 		if used > time.Second*30 {
 			root, _ := ms.getRootInode()
 			if root > 1 {
@@ -541,17 +571,18 @@ func (ms *Server) returnInterrupted(unique uint64) {
 
 // returnRequest returns a request to the pool of unused requests.
 func (ms *Server) returnRequest(req *request) {
-	ms.reqMu.Lock()
+	shard := ms.reqShard(req.inHeader.Unique)
+	shard.Lock()
 	this := req.inflightIndex
-	last := len(ms.reqInflight) - 1
+	last := len(shard.reqs) - 1
 
 	if last != this {
-		ms.reqInflight[this] = ms.reqInflight[last]
-		ms.reqInflight[this].inflightIndex = this
+		shard.reqs[this] = shard.reqs[last]
+		shard.reqs[this].inflightIndex = this
 	}
-	ms.reqInflight = ms.reqInflight[:last]
+	shard.reqs = shard.reqs[:last]
 	interrupted := req.interrupted
-	ms.reqMu.Unlock()
+	shard.Unlock()
 
 	ms.recordStats(req)
 	if interrupted {
@@ -657,32 +688,34 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 	for {
 		time.Sleep(time.Second)
 		var batch = 100
-		for i := 0; ; i += batch {
-			now := time.Now()
-			ms.reqMu.Lock()
-			if ms.shutdown.Load() || i >= len(ms.reqInflight) {
-				ms.reqMu.Unlock()
-				break
-			}
-			for j := 0; j < batch && i+j < len(ms.reqInflight); j++ {
-				req := ms.reqInflight[i+j]
-				used := now.Sub(req.startTime)
-				opcode := req.inHeader.Opcode
-				if req.interrupted && used > timeout/10 {
-					unique := req.inHeader.Unique
-					ms.reqMu.Unlock()
-					ms.returnInterrupted(unique)
-					ms.reqMu.Lock()
-				} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique) {
-					log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, ms.maxUnique, used, timeout, req.inHeader)
-					req.interrupted = true
-					close(req.cancel)
-					if req.inHeader.Unique+5.5e6 < ms.maxUnique {
-						ms.maxUnique = req.inHeader.Unique
+		for _, shard := range ms.reqInflight {
+			for i := 0; ; i += batch {
+				now := time.Now()
+				shard.Lock()
+				if ms.shutdown.Load() || i >= len(shard.reqs) {
+					shard.Unlock()
+					break
+				}
+				for j := 0; j < batch && i+j < len(shard.reqs); j++ {
+					req := shard.reqs[i+j]
+					used := now.Sub(req.startTime)
+					opcode := req.inHeader.Opcode
+					if req.interrupted && used > timeout/10 {
+						unique := req.inHeader.Unique
+						shard.Unlock()
+						ms.returnInterrupted(unique)
+						shard.Lock()
+					} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique.Load()) {
+						log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, ms.maxUnique.Load(), used, timeout, req.inHeader)
+						req.interrupted = true
+						close(req.cancel)
+						if req.inHeader.Unique+5.5e6 < ms.maxUnique.Load() {
+							ms.maxUnique.Store(req.inHeader.Unique)
+						}
 					}
 				}
+				shard.Unlock()
 			}
-			ms.reqMu.Unlock()
 		}
 	}
 }
@@ -691,9 +724,7 @@ func (ms *Server) Shutdown() bool {
 	log.Printf("try to restart gracefully")
 	start := time.Now()
 	ms.shutdown.Store(true)
-	ms.reqMu.Lock()
-	reqs := len(ms.reqInflight)
-	ms.reqMu.Unlock()
+	reqs := ms.reqLen()
 
 	for ms.reqReaders.Load() > 0 || reqs > 0 || ms.writes.Load() > 0 {
 		if ms.reqReaders.Load() > 0 {
@@ -709,6 +740,7 @@ func (ms *Server) Shutdown() bool {
 				ms.shutdown.Store(true)
 			}
 		}
+
 		if time.Since(start) > time.Second*10 {
 			log.Printf("FUSE session is still busy (%d readers, %d requests, %d writers) after 10 seconds, give up",
 				ms.reqReaders.Load(), reqs, ms.writes.Load())
@@ -716,20 +748,20 @@ func (ms *Server) Shutdown() bool {
 			return false
 		}
 		time.Sleep(time.Millisecond * 10)
-		ms.reqMu.Lock()
-		reqs = len(ms.reqInflight)
-		ms.reqMu.Unlock()
+		reqs = ms.reqLen()
 	}
 
 	// Do not transfer a session with requests still in flight.
-	ms.reqMu.Lock()
-	if len(ms.reqInflight) > 0 {
-		log.Printf("there are %d requests in flight, give up", len(ms.reqInflight))
-		ms.shutdown = false
-		ms.reqMu.Unlock()
-		return false
+	for _, shard := range ms.reqInflight {
+		shard.Lock()
+		if len(shard.reqs) > 0 {
+			log.Printf("there are %d requests in flight, give up", len(shard.reqs))
+			ms.shutdown.Store(false)
+			shard.Unlock()
+			return false
+		}
+		shard.Unlock()
 	}
-	ms.reqMu.Unlock()
 	return true
 }
 
