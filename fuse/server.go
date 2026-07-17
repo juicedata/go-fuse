@@ -42,11 +42,12 @@ const (
 
 // Server contains the logic for reading from the FUSE device and
 // translating it to RawFileSystem interface calls.
-const REQINFLIGHT_SHARD = 8
+const REQINFLIGHT_SHARD = 16
 
 type requestInflight struct {
 	sync.Mutex
-	reqs []*request
+	maxUnique uint64
+	reqs      []*request
 }
 
 type Server struct {
@@ -65,8 +66,8 @@ type Server struct {
 	opts *MountOptions
 
 	// maxReaders is the maximum number of goroutines reading requests
-	maxReaders int32
-	maxUnique  atomic.Uint64
+	maxReaders   int32
+	workPoolMode bool
 
 	// Pools for []byte
 	buffers bufferPool
@@ -97,6 +98,8 @@ type Server struct {
 
 	// for implementing single threaded processing.
 	requestProcessingMu sync.Mutex
+
+	runQueue *requestPools
 }
 
 func (ms *Server) reqShard(unique uint64) *requestInflight {
@@ -230,11 +233,23 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 	}
 
+	workPoolMode := false
+	if tmp := os.Getenv("JFS_FUSE_USE_WORKPOOL"); tmp != "" {
+		if v, err := strconv.ParseInt(tmp, 10, 32); err == nil {
+			workPoolMode = (v > 0)
+		}
+	}
+
 	ms := &Server{
-		fileSystem: fs,
-		opts:       &o,
-		maxReaders: int32(maxReaders),
+		fileSystem:   fs,
+		opts:         &o,
+		maxReaders:   int32(maxReaders),
+		workPoolMode: workPoolMode,
 		reqInflight: [REQINFLIGHT_SHARD]*requestInflight{
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{},
+			&requestInflight{}, &requestInflight{},
 			&requestInflight{}, &requestInflight{},
 			&requestInflight{}, &requestInflight{},
 			&requestInflight{}, &requestInflight{},
@@ -246,6 +261,7 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		singleReader: runtime.GOOS == "darwin",
 		ready:        make(chan error, 1),
 	}
+	ms.runQueue = newRequestPool(ms, maxReaders)
 	ms.reqPool.New = func() interface{} {
 		return &request{
 			cancel: make(chan struct{}),
@@ -312,7 +328,7 @@ func (ms *Server) mount(opt *MountOptions) error {
 			syscall.CloseOnExec(fds[1])
 			ms.mountFd = fds[1]
 			ms.fileSystem.Init(ms)
-			ms.recentUnique = make([]uint64, 0)
+			ms.recentUnique = make([]uint64, 0, 1024)
 			go ms.sendFd(path)
 			go ms.checkLostRequests()
 			return nil
@@ -418,7 +434,7 @@ func handleEINTR(fn func() error) (err error) {
 // nil, OK if we have too many readers already.
 func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	if exitIdle {
-		if ms.shutdown.Load() || ms.reqReaders.Load() >= ms.maxReaders {
+		if ms.shutdown.Load() || (!ms.workPoolMode && ms.reqReaders.Load() >= ms.maxReaders) {
 			return nil, OK
 		}
 	} else {
@@ -461,18 +477,18 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	if ms.recentUnique != nil {
 		ms.recentUnique = append(ms.recentUnique, req.inHeader.Unique)
 	}
-	if req.inHeader.Unique > ms.maxUnique.Load() {
-		ms.maxUnique.Store(req.inHeader.Unique)
-	}
 	ms.readMu.Unlock()
 
 	shard := ms.reqShard(req.inHeader.Unique)
 	shard.Lock()
+	if req.inHeader.Unique > shard.maxUnique {
+		shard.maxUnique = req.inHeader.Unique
+	}
 	req.inflightIndex = len(shard.reqs)
 	shard.reqs = append(shard.reqs, req)
 	shard.Unlock()
 
-	if !ms.singleReader && reqcnt < 2 && reqcnt < ms.maxReaders && !ms.shutdown.Load() {
+	if !ms.workPoolMode && !ms.singleReader && reqcnt < 2 && reqcnt < ms.maxReaders && !ms.shutdown.Load() {
 		ms.loops.Add(1)
 		go ms.loop(true)
 	}
@@ -631,6 +647,12 @@ func (ms *Server) Serve() {
 	if ms.opts.Timeout > 0 {
 		go ms.checkRequestTimeout(ms.opts.Timeout)
 	}
+	if !ms.singleReader {
+		for i := 1; i < int(ms.maxReaders); i++ {
+			ms.loops.Add(1)
+			go ms.loop(true)
+		}
+	}
 	ms.loop(false)
 	ms.loops.Wait()
 
@@ -705,12 +727,12 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 						shard.Unlock()
 						ms.returnInterrupted(unique)
 						shard.Lock()
-					} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique.Load()) {
-						log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, ms.maxUnique.Load(), used, timeout, req.inHeader)
+					} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || req.inHeader.Unique+5.5e6 < shard.maxUnique) {
+						log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, shard.maxUnique, used, timeout, req.inHeader)
 						req.interrupted = true
 						close(req.cancel)
-						if req.inHeader.Unique+5.5e6 < ms.maxUnique.Load() {
-							ms.maxUnique.Store(req.inHeader.Unique)
+						if req.inHeader.Unique+5.5e6 < shard.maxUnique {
+							shard.maxUnique = req.inHeader.Unique
 						}
 					}
 				}
@@ -788,6 +810,7 @@ func (ms *Server) handleInit() Status {
 
 func (ms *Server) loop(exitIdle bool) {
 	defer ms.loops.Done()
+	runq := ms.runQueue.getRunQueue()
 exit:
 	for {
 		req, errNo := ms.readRequest(exitIdle)
@@ -809,10 +832,14 @@ exit:
 			break exit
 		}
 
-		if ms.singleReader {
-			go ms.handleRequest(req)
+		if ms.workPoolMode {
+			runq.push(req)
 		} else {
-			ms.handleRequest(req)
+			if ms.singleReader {
+				go ms.handleRequest(req)
+			} else {
+				ms.handleRequest(req)
+			}
 		}
 	}
 }
@@ -1290,4 +1317,114 @@ func parseFuseFd(mountPoint string) (fd int) {
 		return -1
 	}
 	return fd
+}
+
+const MAX_IDLE_WORKERS = 3
+
+type requestRunQueue struct {
+	sync.Mutex
+	ms      *Server
+	reqcnt  atomic.Int32
+	quecnt  atomic.Int32
+	workcnt atomic.Int32
+	waiting atomic.Int32
+	avgpos  int32
+	avgwait [8]int32
+	minwait int32
+	reqch   chan *request
+	queue   []*request
+}
+
+func (rq *requestRunQueue) maxWait() int32 {
+	var maxwait int32 = 0
+	var minwait int32 = 0x7FFFFFFF
+	rq.avgpos = (rq.avgpos + 1) % 8
+	rq.avgwait[rq.avgpos] = rq.waiting.Load()
+	for _, v := range rq.avgwait {
+		if v > maxwait {
+			maxwait = v
+		}
+		if v < minwait {
+			minwait = v
+		}
+	}
+	rq.minwait = minwait
+	return maxwait
+}
+
+type requestPools struct {
+	id     atomic.Uint32
+	ms     *Server
+	queues []*requestRunQueue
+}
+
+func (rq *requestPools) getRunQueue() *requestRunQueue {
+	return rq.queues[rq.id.Add(1)%uint32(len(rq.queues))]
+}
+
+func (rq *requestPools) check() {
+	for {
+		for _, q := range rq.queues {
+			if q.quecnt.Load() > 0 {
+				var breakloop bool
+				q.Lock()
+				for i := len(q.queue); !breakloop && i > 0; i-- {
+					rreq := q.queue[i-1]
+					select {
+					case q.reqch <- rreq:
+						q.queue[i-1] = nil
+						q.queue = q.queue[:i-1]
+						q.quecnt.Add(-1)
+					default:
+						breakloop = true
+					}
+				}
+				q.Unlock()
+			}
+			if q.maxWait() == 0 && q.reqcnt.Load() > 0 {
+				go q.run()
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func newRequestPool(ms *Server, size int) *requestPools {
+	rq := &requestPools{ms: ms}
+	rq.queues = make([]*requestRunQueue, size)
+	for i := 0; i < size; i++ {
+		rq.queues[i] = &requestRunQueue{ms: ms, reqch: make(chan *request, 1024), queue: make([]*request, 0, 1024)}
+	}
+	go rq.check()
+	return rq
+}
+
+func (rq *requestRunQueue) push(rreq *request) {
+	rq.reqcnt.Add(1)
+	select {
+	case rq.reqch <- rreq:
+		if rq.waiting.Load() == 0 && rq.workcnt.Load() < MAX_IDLE_WORKERS {
+			rq.workcnt.Add(1)
+			go rq.run()
+		}
+	default:
+		rq.quecnt.Add(1)
+		rq.Lock()
+		rq.queue = append(rq.queue, rreq)
+		rq.Unlock()
+	}
+}
+
+func (rq *requestRunQueue) run() {
+	defer rq.workcnt.Add(-1)
+	for {
+		rq.waiting.Add(1)
+		rreq := <-rq.reqch
+		rq.waiting.Add(-1)
+		rq.reqcnt.Add(-1)
+		rq.ms.handleRequest(rreq)
+		if rq.reqcnt.Load() == 0 && rq.minwait > MAX_IDLE_WORKERS {
+			break
+		}
+	}
 }
