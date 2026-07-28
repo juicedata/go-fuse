@@ -61,8 +61,6 @@ type Server struct {
 	// I/O with kernel and daemon.
 	mountFd int
 
-	latencies LatencyMap
-
 	opts *MountOptions
 
 	// maxReaders is the maximum number of goroutines reading requests
@@ -135,16 +133,13 @@ func (ms *Server) KernelSettings() *InitIn {
 
 const _MAX_NAME_LEN = 20
 
-// This type may be provided for recording latencies of each FUSE
-// operation.
+// This type is deprecated.
 type LatencyMap interface {
 	Add(name string, dt time.Duration)
 }
 
-// RecordLatencies switches on collection of timing for each request
-// coming from the kernel.P assing a nil argument switches off the
+// RecordLatencies is deprecated. It is provided for backward compatibility but does not do anything.
 func (ms *Server) RecordLatencies(l LatencyMap) {
-	ms.latencies = l
 }
 
 // Unmount calls fusermount -u on the mount. This has the effect of
@@ -600,7 +595,6 @@ func (ms *Server) returnRequest(req *request) {
 	interrupted := req.interrupted
 	shard.Unlock()
 
-	ms.recordStats(req)
 	if interrupted {
 		// Don't reposses data, because someone might still
 		// be looking at it
@@ -627,14 +621,6 @@ func (ms *Server) returnRequest(req *request) {
 		log.Printf("request is canceled")
 	default:
 		ms.reqPool.Put(req)
-	}
-}
-
-func (ms *Server) recordStats(req *request) {
-	if ms.latencies != nil {
-		dt := time.Now().Sub(req.startTime)
-		opname := operationName(req.inHeader.Opcode)
-		ms.latencies.Add(opname, dt)
 	}
 }
 
