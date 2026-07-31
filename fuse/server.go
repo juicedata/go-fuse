@@ -46,8 +46,9 @@ const REQINFLIGHT_SHARD = 16
 
 type requestInflight struct {
 	sync.Mutex
-	maxUnique uint64
-	reqs      []*request
+	maxUnique    uint64
+	reqs         []*request
+	recentUnique []uint64
 }
 
 type Server struct {
@@ -78,7 +79,6 @@ type Server struct {
 	readMu         sync.Mutex
 	reqReaders     atomic.Int32
 	reqInflight    [REQINFLIGHT_SHARD]*requestInflight
-	recentUnique   []uint64
 	kernelSettings InitIn
 
 	// in-flight notify-retrieve queries
@@ -323,7 +323,9 @@ func (ms *Server) mount(opt *MountOptions) error {
 			syscall.CloseOnExec(fds[1])
 			ms.mountFd = fds[1]
 			ms.fileSystem.Init(ms)
-			ms.recentUnique = make([]uint64, 0, 1024)
+			for _, shard := range ms.reqInflight {
+				shard.recentUnique = make([]uint64, 0, 256)
+			}
 			go ms.sendFd(path)
 			go ms.checkLostRequests()
 			return nil
@@ -463,19 +465,24 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	}
 
 	reqcnt := ms.reqReaders.Add(-1)
-	ms.readMu.Lock()
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
-		ms.readMu.Unlock()
 		return nil, status
 	}
-	if ms.recentUnique != nil {
-		ms.recentUnique = append(ms.recentUnique, req.inHeader.Unique)
-	}
-	ms.readMu.Unlock()
+
+	/*
+		ms.readMu.Lock()
+		if ms.recentUnique != nil {
+			ms.recentUnique = append(ms.recentUnique, req.inHeader.Unique)
+		}
+		ms.readMu.Unlock()
+	*/
 
 	shard := ms.reqShard(req.inHeader.Unique)
 	shard.Lock()
+	if shard.recentUnique != nil {
+		shard.recentUnique = append(shard.recentUnique, req.inHeader.Unique)
+	}
 	if req.inHeader.Unique > shard.maxUnique {
 		shard.maxUnique = req.inHeader.Unique
 	}
@@ -522,27 +529,29 @@ func (ms *Server) checkLostRequests() {
 	start := time.Now()
 	var recentUnique []uint64
 	time.Sleep(time.Second * 3)
-	for {
-		if ms.shutdown.Load() {
-			return
-		}
-		used := time.Since(start)
-		ms.readMu.Lock()
-		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
-			recentUnique = ms.recentUnique
-			ms.recentUnique = nil
-			ms.readMu.Unlock()
-			break
-		}
-		ms.readMu.Unlock()
-		if used > time.Second*30 {
-			root, _ := ms.getRootInode()
-			if root > 1 {
-				log.Printf("FUSE: %s is umounted, give up after %s ", ms.mountPoint, used)
-				os.Exit(0)
+	for _, shard := range ms.reqInflight {
+		for {
+			if ms.shutdown.Load() {
+				return
 			}
+			used := time.Since(start)
+			shard.Lock()
+			if len(shard.recentUnique) >= 30 || len(shard.recentUnique) > 1 && used > time.Second*10 {
+				recentUnique = append(recentUnique, shard.recentUnique...)
+				shard.recentUnique = nil
+				shard.Unlock()
+				break
+			}
+			shard.Unlock()
+			if used > time.Second*30 {
+				root, _ := ms.getRootInode()
+				if root > 1 {
+					log.Printf("FUSE: %s is umounted, give up after %s ", ms.mountPoint, used)
+					os.Exit(0)
+				}
+			}
+			time.Sleep(time.Second)
 		}
-		time.Sleep(time.Second)
 	}
 
 	sort.Slice(recentUnique, func(i, j int) bool { return recentUnique[i] < recentUnique[j] })
