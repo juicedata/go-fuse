@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
 	"unsafe"
 )
@@ -55,7 +54,6 @@ type request struct {
 	// obtained through bufferpool.
 	bufferPoolInputBuf  []byte
 	bufferPoolOutputBuf []byte
-	bufferOutPool       *sync.Pool
 
 	// For small pieces of data, we use the following inlines
 	// arrays:

@@ -38,7 +38,7 @@ func (p *bufferPool) getPool(pageCount int) *sync.Pool {
 
 // AllocBuffer creates a buffer of at least the given size. After use,
 // it should be deallocated with FreeBuffer().
-func (p *bufferPool) AllocBuffer(size uint32) ([]byte, *sync.Pool) {
+func (p *bufferPool) AllocBuffer(size uint32) []byte {
 	sz := int(size)
 	if sz < pageSize {
 		sz = pageSize
@@ -51,7 +51,7 @@ func (p *bufferPool) AllocBuffer(size uint32) ([]byte, *sync.Pool) {
 
 	pool := p.getPool(pages)
 	b := pool.Get().([]byte)
-	return b[:size], pool
+	return b[:size]
 }
 
 // FreeBuffer takes back a buffer if it was allocated through
