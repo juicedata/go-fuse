@@ -13,19 +13,27 @@ import (
 // minimizing the GC overhead of communicating with the kernel.
 type bufferPool struct {
 	// For each page size multiple a list of slice pointers.
-	buffersBySize sync.Map
+	sync.Mutex
+	buffersBySize [2048]*sync.Pool
 }
 
 var pageSize = os.Getpagesize()
 
 func (p *bufferPool) getPool(pageCount int) *sync.Pool {
-	if pool_, ok := p.buffersBySize.Load(pageCount); ok {
-		return pool_.(*sync.Pool)
+	pool := p.buffersBySize[pageCount]
+	if pool != nil {
+		return pool
 	}
-	pool_, _ := p.buffersBySize.LoadOrStore(pageCount, &sync.Pool{
-		New: func() interface{} { return make([]byte, pageSize*pageCount) },
-	})
-	return pool_.(*sync.Pool)
+	p.Lock()
+	defer p.Unlock()
+	if pool = p.buffersBySize[pageCount]; pool == nil {
+		pool = &sync.Pool{
+			New: func() interface{} { return make([]byte, pageSize*pageCount) },
+		}
+		p.buffersBySize[pageCount] = pool
+	}
+	return pool
+
 }
 
 // AllocBuffer creates a buffer of at least the given size. After use,
