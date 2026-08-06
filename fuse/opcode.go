@@ -103,6 +103,14 @@ func doInit(server *Server, req *request) {
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
 		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS | CAP_MAX_PAGES | CAP_RENAME_SWAP | CAP_EXPORT_SUPPORT | server.opts.OtherCaps)
+	// Flags2 (added in minor 36) is only actually present in the bytes the
+	// kernel wrote for this INIT request; for an older client, `*input`'s
+	// blind struct copy above just picked up whatever was left in the
+	// pooled, never-zeroed request buffer from a prior request. Discard it
+	// unless this INIT genuinely carries it — see _MINOR_VERSION_INIT_EXT.
+	if input.Minor < _MINOR_VERSION_INIT_EXT {
+		server.kernelSettings.Flags2 = 0
+	}
 
 	if server.opts.DontUmask {
 		server.kernelSettings.Flags |= CAP_DONT_MASK
