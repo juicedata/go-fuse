@@ -14,7 +14,7 @@ import (
 type bufferPool struct {
 	// For each page size multiple a list of slice pointers.
 	sync.Mutex
-	buffersBySize [2048]*sync.Pool
+	buffersBySize [65536]*sync.Pool
 }
 
 var pageSize = os.Getpagesize()
