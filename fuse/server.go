@@ -637,7 +637,22 @@ func (ms *Server) Wait() {
 
 func (ms *Server) wakeupReader() {
 	cmd := exec.Command("df", ms.mountPoint)
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
+
+	pid := cmd.Process.Pid
+	go func() {
+		defer runtime.KeepAlive(cmd)
+		for {
+			var ws syscall.WaitStatus
+			wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+			if wpid == pid || (err != nil && err != syscall.EINTR) {
+				return
+			}
+			time.Sleep(time.Millisecond * 20)
+		}
+	}()
 }
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
