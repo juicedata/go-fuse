@@ -637,9 +637,7 @@ func (ms *Server) Wait() {
 
 func (ms *Server) wakeupReader() {
 	cmd := exec.Command("df", ms.mountPoint)
-	if err := cmd.Start(); err == nil {
-		go cmd.Wait()
-	}
+	_ = cmd.Start()
 }
 
 func (ms *Server) checkRequestTimeout(timeout time.Duration) {
