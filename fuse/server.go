@@ -460,14 +460,17 @@ func (ms *Server) readRequest(exitIdle bool) (req *request, code Status) {
 	req = ms.reqPool.Get().(*request)
 	req.startTime = time.Now()
 	gobbled := req.setInput(dest[:n])
-	if !gobbled {
-		ms.readPool.Put(dest)
-	}
 
 	reqcnt := ms.reqReaders.Add(-1)
 	// Must parse request.Unique under lock
 	if status := req.parseHeader(); !status.Ok() {
+		ms.readPool.Put(dest)
+		ms.reqPool.Put(req)
 		return nil, status
+	}
+
+	if !gobbled {
+		ms.readPool.Put(dest)
 	}
 
 	/*
