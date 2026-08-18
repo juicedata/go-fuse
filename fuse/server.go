@@ -716,19 +716,6 @@ func (ms *Server) Shutdown() bool {
 				ms.reqMu.Unlock()
 			}
 		}
-		if time.Since(start) > time.Second*3 {
-			ms.reqMu.Lock()
-			if len(ms.reqInflight) > 0 {
-				log.Printf("interrupt %d inflight requests", len(ms.reqInflight))
-			}
-			for _, req := range ms.reqInflight {
-				if !req.interrupted {
-					close(req.cancel)
-					req.interrupted = true
-				}
-			}
-			ms.reqMu.Unlock()
-		}
 		if time.Since(start) > time.Second*10 {
 			log.Printf("FUSE session is still busy (%d readers, %d requests, %d writers) after 10 seconds, give up",
 				readers, reqs, atomic.LoadInt64(&ms.writes))
@@ -744,13 +731,13 @@ func (ms *Server) Shutdown() bool {
 		ms.reqMu.Unlock()
 	}
 
-	// double check
+	// Do not transfer a session with requests still in flight.
 	ms.reqMu.Lock()
 	if len(ms.reqInflight) > 0 {
-		log.Printf("there are %d requests in flight, interrupt them", len(ms.reqInflight))
-		for _, req := range ms.reqInflight {
-			ms.returnInterrupted(req.inHeader.Unique)
-		}
+		log.Printf("there are %d requests in flight, give up", len(ms.reqInflight))
+		ms.shutdown = false
+		ms.reqMu.Unlock()
+		return false
 	}
 	ms.reqMu.Unlock()
 	return true
