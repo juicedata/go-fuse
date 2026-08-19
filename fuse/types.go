@@ -259,12 +259,23 @@ const (
 	FOPEN_STREAM                 = (1 << 4)
 	FOPEN_NOFLUSH                = (1 << 5)
 	FOPEN_PARALLEL_DIRECT_WRITES = (1 << 6)
+	FOPEN_PASSTHROUGH            = (1 << 7)
 )
 
 type OpenOut struct {
 	Fh        uint64
 	OpenFlags uint32
-	Padding   uint32
+	// BackingID is the kernel backing-file id from Server.RegisterBackingFd.
+	// Only honored when FOPEN_PASSTHROUGH is set; else must be 0 (was Padding).
+	BackingID int32
+}
+
+// BackingMap is passed to FUSE_DEV_IOC_BACKING_OPEN to register a backing
+// file descriptor for passthrough.
+type BackingMap struct {
+	Fd      int32
+	Flags   uint32
+	padding uint64
 }
 
 // To be set in InitIn/InitOut.Flags.
@@ -307,6 +318,7 @@ const (
 	CAP_CREATE_SUPP_GROUP = (1 << 34)
 	CAP_HAS_EXPIRE_ONLY   = (1 << 35)
 	CAP_DIRECT_IO_RELAX   = (1 << 36)
+	CAP_PASSTHROUGH       = (1 << 37)
 )
 
 type InitIn struct {
@@ -332,7 +344,8 @@ type InitOut struct {
 	MaxPages            uint16
 	Padding             uint16
 	Flags2              uint32
-	Unused              [7]uint32
+	MaxStackDepth       uint32
+	Unused              [6]uint32
 }
 
 type _CuseInitIn struct {

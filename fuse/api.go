@@ -294,6 +294,16 @@ type MountOptions struct {
 	// EnableWriteback enables kernel writeback cache.
 	EnableWriteback bool
 
+	// EnablePassthrough negotiates FUSE passthrough (kernel >= 6.9) at INIT.
+	// When enabled and supported, the daemon may register a backing file via
+	// Server.RegisterBackingFd and return FOPEN_PASSTHROUGH + OpenOut.BackingID
+	// so the kernel serves read/write directly from the backing file.
+	EnablePassthrough bool
+
+	// MaxStackDepth bounds passthrough backing-file stacking (default 2 when
+	// EnablePassthrough is set). Kernel cap is FILESYSTEM_MAX_STACK_DEPTH (2).
+	MaxStackDepth int
+
 	EnableIoctl bool
 
 	// If set, tell kernel not to apply umask for create/mkdir/mknod
