@@ -525,7 +525,6 @@ func (ms *Server) checkLostRequests() {
 		for u > last+1 {
 			last++
 			// interrupt lost one
-			log.Printf("FUSE: interrupt lost one %d", last)
 			ms.returnInterrupted(last)
 		}
 	}
@@ -540,7 +539,6 @@ func (ms *Server) checkLostRequests() {
 	}
 	var c int
 	for last > 0 && c < 6e6 {
-		log.Printf("FUSE: interrupt historic ones %d", last)
 		ms.returnInterrupted(last)
 		last--
 		c++
