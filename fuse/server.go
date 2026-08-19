@@ -282,7 +282,7 @@ func (ms *Server) mount(opt *MountOptions) error {
 			ms.fileSystem.Init(ms)
 			ms.recentUnique = make([]uint64, 0)
 			go ms.sendFd(path)
-			go ms.checkLostRequests()
+			// go ms.checkLostRequests()
 			return nil
 		}
 	}
