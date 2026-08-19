@@ -515,18 +515,18 @@ func (ms *Server) checkLostRequests() {
 	}
 
 	sort.Slice(recentUnique, func(i, j int) bool { return recentUnique[i] < recentUnique[j] })
-	log.Printf("FUSE: checking lost requests with %d samples after %s: min=%d median=%d max=%d maxUnique=%d inflight=%d",
-		len(recentUnique), time.Since(start), recentUnique[0], recentUnique[len(recentUnique)/2], recentUnique[len(recentUnique)-1], maxUnique, inflight)
+	log.Printf("FUSE: checking lost requests with %d samples after %s: samples=%v maxUnique=%d inflight=%d", len(recentUnique), time.Since(start), recentUnique, maxUnique, inflight)
 	var last = recentUnique[0]
 	for _, u := range recentUnique[:len(recentUnique)/2] {
 		if u > last+1 {
-			log.Printf("FUSE: checking lost requests gap: first=%d last=%d", last+1, u-1)
+			log.Printf("FUSE: checking lost requests gap: u=%d last=%d", last, u)
 		}
 		for u > last+1 {
 			last++
 			// interrupt lost one
 			ms.returnInterrupted(last)
 		}
+		last = u
 	}
 	// interrupt historic ones
 	last = recentUnique[0] - 1
