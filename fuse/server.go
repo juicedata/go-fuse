@@ -475,7 +475,6 @@ func (ms *Server) getRootInode() (int, error) {
 }
 
 func (ms *Server) checkLostRequests() {
-	log.Printf("FUSE: start checking lost requests")
 	go func() {
 		// issue a few requests to interrupt lost ones
 		for i := 0; i < 30; i++ {
@@ -485,8 +484,6 @@ func (ms *Server) checkLostRequests() {
 	}()
 	start := time.Now()
 	var recentUnique []uint64
-	var maxUnique uint64
-	var inflight int
 	time.Sleep(time.Second * 3)
 	for {
 		ms.reqMu.Lock()
@@ -497,8 +494,6 @@ func (ms *Server) checkLostRequests() {
 		used := time.Since(start)
 		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
 			recentUnique = ms.recentUnique
-			maxUnique = ms.maxUnique
-			inflight = len(ms.reqInflight)
 			ms.recentUnique = nil
 			ms.reqMu.Unlock()
 			break
@@ -515,12 +510,8 @@ func (ms *Server) checkLostRequests() {
 	}
 
 	sort.Slice(recentUnique, func(i, j int) bool { return recentUnique[i] < recentUnique[j] })
-	log.Printf("FUSE: checking lost requests with %d samples after %s: samples=%v maxUnique=%d inflight=%d", len(recentUnique), time.Since(start), recentUnique, maxUnique, inflight)
 	var last = recentUnique[0]
 	for _, u := range recentUnique[:len(recentUnique)/2] {
-		if u > last+1 {
-			log.Printf("FUSE: checking lost requests gap: u=%d last=%d", last, u)
-		}
 		for u > last+1 {
 			last++
 			// interrupt lost one
@@ -530,13 +521,6 @@ func (ms *Server) checkLostRequests() {
 	}
 	// interrupt historic ones
 	last = recentUnique[0] - 1
-	if last > 0 {
-		first := uint64(1)
-		if last >= 6e6 {
-			first = last - 6e6 + 1
-		}
-		log.Printf("FUSE: checking historic requests: first=%d last=%d", first, last)
-	}
 	var c int
 	for last > 0 && c < 6e6 {
 		ms.returnInterrupted(last)
