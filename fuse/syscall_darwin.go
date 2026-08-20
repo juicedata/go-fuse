@@ -10,6 +10,8 @@ import (
 	"unsafe"
 )
 
+const MSG_CMSG_CLOEXEC = 0
+
 func getxattr(path string, attr string, dest []byte) (sz int, errno int) {
 	pathBs, err := syscall.BytePtrFromString(path)
 	if err != nil {

@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -70,6 +73,10 @@ type Server struct {
 
 	// for implementing single threaded processing.
 	requestProcessingMu sync.Mutex
+
+	// writes counts in-flight reply writes to the FUSE fd so Shutdown
+	// can tell whether a write is still outstanding.
+	writes atomic.Int64
 }
 
 // SetDebug is deprecated. Use MountOptions.Debug instead.
@@ -203,6 +210,85 @@ func defaultPanicHandler(logger *log.Logger, obj any) Status {
 	return EIO
 }
 
+// sendFd hands the live FUSE fd and negotiated kernel settings to a
+// successor over the opts.FdCommSocket socket, retrying until it is taken.
+// The fd is fetched through withFD so it cannot be closed mid-transfer.
+func (ms *Server) sendFd(path string) {
+	buf := make([]byte, unsafe.Sizeof(InitIn{}))
+	*(*InitIn)(unsafe.Pointer(&buf[0])) = ms.kernelSettings
+
+	for {
+		var err error
+		if cerr := ms.fuseFD.withFD(func(fd int) {
+			err = sendFuseFd(path, buf, fd)
+		}); cerr != nil {
+			err = cerr
+		}
+		if err == nil {
+			break
+		}
+		log.Println("send FUSE", err)
+		time.Sleep(time.Millisecond * 100)
+	}
+}
+
+// mountWithHandoff tries to adopt a FUSE fd handed over by a predecessor
+// process through the opts.FdCommSocket unix socket. It returns handled=true
+// once the fd is adopted and the server is ready for Serve(); the caller
+// must then skip the normal mount()/handleInit() path.
+func (ms *Server) mountWithHandoff() (handled bool, err error) {
+	path := ms.opts.FdCommSocket
+	if path == "" {
+		return false, nil
+	}
+
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		return false, fmt.Errorf("dial %s: %s", path, err)
+	}
+	defer c.Close()
+
+	msg, fds, err := getFd(c.(*net.UnixConn), 2)
+	if err != nil {
+		return false, fmt.Errorf("get fd: %s", err)
+	}
+	if len(fds) > 0 {
+		// The first fd is not needed by the successor.
+		syscall.Close(fds[0])
+	}
+	if len(fds) != 2 {
+		return false, nil
+	}
+	if len(msg) < int(unsafe.Sizeof(InitIn{})) {
+		return false, fmt.Errorf("short setting: %d < %d", len(msg), unsafe.Sizeof(InitIn{}))
+	}
+
+	// INIT already completed in the predecessor; the negotiated settings
+	// arrive over the socket instead of from a kernel INIT request.
+	ms.kernelSettings = *(*InitIn)(unsafe.Pointer(&msg[0]))
+	if ms.kernelSettings.Minor >= 13 {
+		ms.setSplice()
+	}
+
+	syscall.CloseOnExec(fds[1])
+	ms.fuseFD, err = ms.newFuseFD(fds[1])
+	if err != nil {
+		return false, err
+	}
+	ms.protocolServer.writev = ms.fuseFD.writev
+	ms.fileSystem.Init(ms)
+	ms.recentUnique = make([]uint64, 0)
+	ms.recovering.Store(true)
+
+	// Match NewServer: arm the reader WaitGroup for the upcoming Serve().
+	ms.fuseFD.loops.Add(1)
+
+	close(ms.ready)
+	go ms.sendFd(path)
+	go ms.checkLostRequests()
+	return true, nil
+}
+
 // NewServer creates a FUSE server and attaches ("mounts") it to the
 // `mountPoint` directory.
 //
@@ -261,12 +347,21 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
+	ms.mountPoint = mountPoint
+
+	// Graceful restart: if a predecessor handed us its FUSE fd, adopt it
+	// and skip the normal mount()/handleInit() path.
+	if handled, err := ms.mountWithHandoff(); err != nil {
+		return nil, err
+	} else if handled {
+		return ms, nil
+	}
+
 	fd, err := mount(mountPoint, &o, ms.ready)
 	if err != nil {
 		return nil, err
 	}
 
-	ms.mountPoint = mountPoint
 	ms.fuseFD, err = ms.newFuseFD(fd)
 	if err != nil {
 		return nil, err
@@ -277,6 +372,12 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		ms.fuseFD.close()
 		// TODO - unmount as well?
 		return nil, fmt.Errorf("init: %s", code)
+	}
+
+	// Cold mount under a restart coordinator: publish our fd so a future
+	// successor can adopt it via the handoff path.
+	if path := ms.opts.FdCommSocket; path != "" {
+		go ms.sendFd(path)
 	}
 
 	// This prepares for Serve being called somewhere, either
@@ -374,6 +475,183 @@ func handleEINTR(fn func() error) (err error) {
 	return
 }
 
+func (ms *Server) checkLostRequests() {
+	defer ms.recovering.Store(false)
+	go func() {
+		// issue a few requests to interrupt lost ones
+		for i := 0; i < 30; i++ {
+			ms.wakeupReader()
+			time.Sleep(time.Millisecond * 100)
+		}
+	}()
+	start := time.Now()
+	var recentUnique []uint64
+	time.Sleep(time.Second * 3)
+	for {
+		ms.interruptMu.Lock()
+		if ms.shutdown {
+			ms.interruptMu.Unlock()
+			return
+		}
+		used := time.Since(start)
+		if len(ms.recentUnique) >= 30 || len(ms.recentUnique) > 1 && used > time.Second*10 {
+			recentUnique = ms.recentUnique
+			ms.recentUnique = nil
+			ms.interruptMu.Unlock()
+			break
+		}
+		ms.interruptMu.Unlock()
+		if used > time.Second*30 {
+			root, _ := ms.getRootInode()
+			if root > 1 {
+				log.Printf("FUSE: %s is unmounted, give up recovery after %s", ms.mountPoint, used)
+				return
+			}
+		}
+		time.Sleep(time.Second)
+	}
+
+	sort.Slice(recentUnique, func(i, j int) bool { return recentUnique[i] < recentUnique[j] })
+	// Only treat a gap as a lost request once a later id proves the kernel has
+	// moved well past it; ids within 128 of the newest sample may still be
+	// arriving out of order under concurrency, so leave them.
+	var confirmed uint64
+	if newest := recentUnique[len(recentUnique)-1]; newest > 128 {
+		confirmed = newest - 128
+	}
+	last := recentUnique[0]
+	for _, u := range recentUnique {
+		if u > confirmed {
+			break
+		}
+		for u > last+1 {
+			last++
+			// interrupt lost one
+			ms.returnInterrupted(last)
+		}
+		last = u
+	}
+	// interrupt historic ones
+	last = recentUnique[0] - 1
+	var c int
+	for last > 0 && c < 6e6 {
+		ms.returnInterrupted(last)
+		last--
+		c++
+	}
+}
+
+func (ms *Server) returnInterrupted(unique uint64) {
+	header := make([]byte, sizeOfOutHeader)
+	o := (*OutHeader)(unsafe.Pointer(&header[0]))
+	o.Unique = unique
+	o.Status = -int32(syscall.EINTR)
+	o.Length = uint32(sizeOfOutHeader)
+	err := handleEINTR(func() error {
+		var werr error
+		if cerr := ms.fuseFD.withFD(func(fd int) {
+			_, werr = syscall.Write(fd, header)
+		}); cerr != nil {
+			return cerr
+		}
+		return werr
+	})
+	if err == nil {
+		log.Printf("FUSE: interrupt request %d", unique)
+	}
+}
+
+// wakeupReader pokes the mountpoint to unblock a reader parked in
+// syscall.Read. It issues STATFS asynchronously to avoid spawning an
+// external process and to avoid blocking if the mount is stuck.
+func (ms *Server) wakeupReader() {
+	if ms.mountPoint == "" {
+		return
+	}
+	go func() {
+		var st syscall.Statfs_t
+		_ = syscall.Statfs(ms.mountPoint, &st)
+	}()
+}
+
+// getRootInode returns the inode number of the mountpoint. On a live FUSE
+// mount this is FUSE_ROOT_ID (1); once unmounted it reverts to the
+// underlying directory's inode, which the recovery loop uses to give up.
+func (ms *Server) getRootInode() (int, error) {
+	if ms.mountPoint == "" {
+		return 0, syscall.ENOENT
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(ms.mountPoint, &st); err != nil {
+		return 0, err
+	}
+	return int(st.Ino), nil
+}
+
+// Shutdown quiesces the server for a graceful restart: it stops accepting
+// new work, drains readers and in-flight requests, and interrupts any
+// stragglers after a grace period. It returns false (re-enabling serving)
+// if the session is still busy past the provided timeout.
+func (ms *Server) Shutdown(timeout time.Duration) bool {
+	log.Printf("try to restart gracefully")
+	start := time.Now()
+
+	ms.interruptMu.Lock()
+	ms.shutdown = true
+	ms.interruptMu.Unlock()
+
+	readers := ms.fuseFD.snapshotReaders()
+	reqs := ms.inflightCount()
+
+	for readers > 0 || reqs > 0 || ms.writes.Load() > 0 {
+		if readers > 0 {
+			go ms.wakeupReader()
+		} else if ms.writes.Load() > 0 {
+			// A reply write may be blocked behind unprocessed FUSE
+			// requests; briefly re-enable serving so they can drain.
+			time.Sleep(time.Millisecond * 100)
+			if n := ms.writes.Load(); n > 0 {
+				log.Printf("restore process for %d writes", n)
+				ms.interruptMu.Lock()
+				ms.shutdown = false
+				ms.interruptMu.Unlock()
+				time.Sleep(time.Millisecond * 100)
+				ms.interruptMu.Lock()
+				ms.shutdown = true
+				ms.interruptMu.Unlock()
+			}
+		}
+		if time.Since(start) > timeout {
+			log.Printf("FUSE session is still busy (%d readers, %d requests, %d writers) after %s, give up",
+				readers, reqs, ms.writes.Load(), timeout)
+			ms.interruptMu.Lock()
+			ms.shutdown = false
+			ms.interruptMu.Unlock()
+			return false
+		}
+		time.Sleep(time.Millisecond * 10)
+		readers = ms.fuseFD.snapshotReaders()
+		reqs = ms.inflightCount()
+	}
+
+	return true
+}
+
+// isShutdown reports whether Shutdown has quiesced the server. Notify
+// methods use it to short-circuit while the fd is being handed off.
+func (ms *protocolServer) isShutdown() bool {
+	ms.interruptMu.Lock()
+	defer ms.interruptMu.Unlock()
+	return ms.shutdown
+}
+
+// inflightCount returns the number of in-flight requests.
+func (ms *Server) inflightCount() int {
+	ms.interruptMu.Lock()
+	defer ms.interruptMu.Unlock()
+	return len(ms.reqInflight)
+}
+
 // Serve initiates the FUSE loop. Normally, callers should run Serve()
 // and wait for it to exit, but tests will want to run this in a
 // goroutine.
@@ -388,9 +666,10 @@ func (ms *Server) Serve() {
 	}
 	ms.serving = true
 
-	ms.loop()
+	ms.loop(false)
 	ms.fuseFD.loops.Wait()
 
+	_ = closeFuseFd(ms.opts.FdCommSocket)
 	ms.fuseFD.close()
 
 	// shutdown in-flight cache retrieves.
@@ -424,7 +703,7 @@ func (ms *Server) handleInit() Status {
 	// and don't spawn new readers.
 	orig := ms.singleReader
 	ms.singleReader = true
-	req, errNo := ms.fuseFD.readRequest()
+	req, errNo := ms.fuseFD.readRequest(false)
 	ms.singleReader = orig
 
 	if errNo != OK || req == nil {
@@ -471,11 +750,11 @@ func (ms *Server) handleInit() Status {
 // BenchmarkGoFuseStat-2          	    9310	    121332 ns/op
 // BenchmarkGoFuseReaddir         	    4074	    361568 ns/op
 // BenchmarkGoFuseReaddir-2       	    3511	    319765 ns/op
-func (ms *Server) loop() {
+func (ms *Server) loop(exitIdle bool) {
 	defer ms.fuseFD.loops.Done()
 exit:
 	for {
-		req, errNo := ms.fuseFD.readRequest()
+		req, errNo := ms.fuseFD.readRequest(exitIdle)
 		switch errNo {
 		case OK:
 			if req == nil {
@@ -533,7 +812,9 @@ func (ms *Server) handleRequest(req *requestAlloc) Status {
 	if req.suppressReply {
 		return OK
 	}
+	ms.writes.Add(1)
 	errno := ms.fuseFD.write(&req.request)
+	ms.writes.Add(-1)
 	if errno != 0 {
 		// Ignore ENOENT for INTERRUPT responses which
 		// indicates that the referred request is no longer
@@ -602,6 +883,9 @@ func newNotifyRequest(opcode uint32) *request {
 // InodeNotify invalidates the information associated with the inode
 // (ie. data cache, attributes, etc.)
 func (ms *protocolServer) InodeNotify(node uint64, off int64, length int64) Status {
+	if ms.isShutdown() {
+		return EINTR
+	}
 	req := newNotifyRequest(_OP_NOTIFY_INVAL_INODE)
 
 	entry := (*NotifyInvalInodeOut)(req.outData())
@@ -615,6 +899,9 @@ func (ms *protocolServer) InodeNotify(node uint64, off int64, length int64) Stat
 func (ms *Server) PruneNotify(nodes []uint64) Status {
 	if !ms.kernelSettings.SupportsNotify(NOTIFY_PRUNE) {
 		return ENOSYS
+	}
+	if ms.isShutdown() {
+		return EINTR
 	}
 	if len(nodes) == 0 {
 		return OK
@@ -635,6 +922,9 @@ func (ms *Server) PruneNotify(nodes []uint64) Status {
 // This call is similar to InodeNotify, but instead of only invalidating a data
 // region, it gives updated data directly to the kernel.
 func (ms *protocolServer) InodeNotifyStoreCache(node uint64, offset int64, data []byte) Status {
+	if ms.isShutdown() {
+		return EINTR
+	}
 	for len(data) > 0 {
 		size := len(data)
 		if size > math.MaxInt32 {
@@ -681,6 +971,9 @@ func (ms *protocolServer) inodeNotifyStoreCache32(node uint64, offset int64, dat
 // The kernel returns ENOENT if it does not currently have entry for this inode
 // in its dentry cache.
 func (ms *protocolServer) InodeRetrieveCache(node uint64, offset int64, dest []byte) (n int, st Status) {
+	if ms.isShutdown() {
+		return 0, EINTR
+	}
 	// the kernel won't send us in one go more then what we negotiated as MaxWrite.
 	// retrieve the data in chunks.
 	// TODO spawn some number of readahead retrievers in parallel.
@@ -787,6 +1080,9 @@ type retrieveCacheRequest struct {
 // some process. You should not hold any FUSE filesystem locks, as that
 // can lead to deadlock.
 func (ms *protocolServer) DeleteNotify(parent uint64, child uint64, name string) Status {
+	if ms.isShutdown() {
+		return EINTR
+	}
 	req := newNotifyRequest(_OP_NOTIFY_DELETE)
 
 	entry := (*NotifyInvalDeleteOut)(req.outData())
@@ -808,6 +1104,9 @@ func (ms *protocolServer) DeleteNotify(parent uint64, child uint64, name string)
 // within a directory changes. You should not hold any FUSE filesystem
 // locks, as that can lead to deadlock.
 func (ms *protocolServer) EntryNotify(parent uint64, name string) Status {
+	if ms.isShutdown() {
+		return EINTR
+	}
 	req := newNotifyRequest(_OP_NOTIFY_INVAL_ENTRY)
 	entry := (*NotifyInvalEntryOut)(req.outData())
 	entry.Parent = parent

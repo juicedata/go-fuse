@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -184,8 +185,8 @@ func (r *request) OutputDebug() string {
 	if extraStr != "" {
 		extraStr = ", " + extraStr
 	}
-	return fmt.Sprintf("tx %d:     %v%s",
-		r.inHeader().Unique, r.status, extraStr)
+	return fmt.Sprintf("[%d] tx %d:     %v%s",
+		os.Getpid(), r.inHeader().Unique, r.status, extraStr)
 }
 
 // setInput returns true if it takes ownership of the argument, false if not.

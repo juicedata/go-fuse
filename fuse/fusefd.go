@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -99,8 +100,22 @@ func (r *fuseFD) writevFD(iov [][]byte) (int, error) {
 // readRequest reads one request from the kernel. Returns nil, OK if
 // there are too many concurrent readers or insufficient request-bytes
 // budget.
-func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
+//
+// exitIdle distinguishes the two reader roles during a graceful-restart
+// Shutdown: an idle reader returns nil,OK so its loop exits and the reader
+// count can drain to zero, while the primary reader parks until serving is
+// either handed off (process exit) or resumed (Shutdown gave up).
+func (r *fuseFD) readRequest(exitIdle bool) (req *requestAlloc, code Status) {
 	ms := r.server
+	if exitIdle {
+		if ms.isShutdown() {
+			return nil, OK
+		}
+	} else {
+		for ms.isShutdown() {
+			time.Sleep(time.Millisecond)
+		}
+	}
 	r.reqMu.Lock()
 	if r.reqReaders > ms.maxReaders || !r.reserveRequestBytes() {
 		r.reqMu.Unlock()
@@ -154,7 +169,7 @@ func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 	r.reqReaders--
 	if !ms.singleReader && r.reqReaders <= 0 && !needsBackPressure {
 		r.loops.Add(1)
-		go ms.loop()
+		go ms.loop(true)
 	}
 
 	return req, OK
@@ -200,6 +215,13 @@ func (r *fuseFD) canAcceptAnother() bool {
 	r.reqMu.Lock()
 	defer r.reqMu.Unlock()
 	return r.canReserveRequestBytes()
+}
+
+// snapshotReaders returns the current number of reader goroutines on fd.
+func (r *fuseFD) snapshotReaders() int {
+	r.reqMu.Lock()
+	defer r.reqMu.Unlock()
+	return r.reqReaders
 }
 
 func (r *fuseFD) requestBytes() int {

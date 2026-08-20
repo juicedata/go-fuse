@@ -6,6 +6,7 @@ package fuse
 
 import (
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -18,6 +19,17 @@ type protocolServer struct {
 	interruptMu    sync.Mutex
 	reqInflight    []*request
 	connectionDead bool
+
+	// Request-id bookkeeping for graceful-restart recovery.
+	// Guarded by interruptMu.
+	recentUnique []uint64
+	shutdown     bool
+
+	// recovering is true only during the post-handoff recovery window,
+	// while checkLostRequests reconciles requests lost in the switchover.
+	// It scopes interruptRequest's ack-unmatched-interrupts behaviour so
+	// upstream EAGAIN semantics are preserved outside recovery.
+	recovering atomic.Bool
 
 	kernelSettings InitIn
 
@@ -94,6 +106,11 @@ func (ms *protocolServer) addInflight(req *request) {
 	defer ms.interruptMu.Unlock()
 	req.inflightIndex = len(ms.reqInflight)
 	ms.reqInflight = append(ms.reqInflight, req)
+	// During a graceful-restart handoff, record ids so checkLostRequests can
+	// spot requests lost in the switchover.
+	if ms.recentUnique != nil {
+		ms.recentUnique = append(ms.recentUnique, req.inHeader().Unique)
+	}
 }
 
 func (ms *protocolServer) dropInflight(req *request) {
@@ -121,6 +138,13 @@ func (ms *protocolServer) interruptRequest(unique uint64) Status {
 		}
 	}
 
+	// The target request is not in flight. During a graceful-restart
+	// handoff the kernel keeps re-sending interrupts for requests lost in
+	// the switchover; ack them so it stops retrying. Outside recovery,
+	// return EAGAIN to keep upstream retry semantics.
+	if ms.recovering.Load() {
+		return OK
+	}
 	return EAGAIN
 }
 
