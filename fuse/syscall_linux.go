@@ -5,8 +5,12 @@
 package fuse
 
 import (
+	"syscall"
+
 	"golang.org/x/sys/unix"
 )
+
+const MSG_CMSG_CLOEXEC = syscall.MSG_CMSG_CLOEXEC
 
 func writev(fd int, packet [][]byte) (n int, err error) {
 	n, err = unix.Writev(fd, packet)

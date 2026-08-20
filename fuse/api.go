@@ -132,7 +132,9 @@
 // the Dev field in the Stat_t result for a file in the mount.
 package fuse
 
-import "log"
+import (
+	"log"
+)
 
 // Types for users to implement.
 
@@ -386,6 +388,12 @@ type MountOptions struct {
 	// ExtraCapabilities is a bitmask of capabilities which
 	// must be enabled in addition to the defaults.
 	ExtraCapabilities uint64
+
+	// FdCommSocket, if non-empty, enables graceful-restart FUSE fd
+	// handoff over this unix socket: NewServer adopts a predecessor's fd
+	// from it and publishes its own fd for a successor. Empty disables
+	// the mechanism. The caller owns creating/serving the socket.
+	FdCommSocket string
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
