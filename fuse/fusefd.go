@@ -34,6 +34,7 @@ type fuseFD struct {
 	reqMu                sync.Mutex
 	reqReaders           int
 	inflightRequestBytes int
+	recentUnique         []uint64
 
 	// loops tracks reader goroutines servicing fd.
 	loops sync.WaitGroup
@@ -99,9 +100,19 @@ func (r *fuseFD) writevFD(iov [][]byte) (int, error) {
 // readRequest reads one request from the kernel. Returns nil, OK if
 // there are too many concurrent readers or insufficient request-bytes
 // budget.
-func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
+func (r *fuseFD) readRequest(exitIdle bool) (req *requestAlloc, code Status) {
 	ms := r.server
+	shutdown := ms.shutdown
 	r.reqMu.Lock()
+	if shutdown != nil {
+		for shutdown.phase == phaseStopReaders {
+			if exitIdle {
+				r.reqMu.Unlock()
+				return nil, OK
+			}
+			shutdown.cond.Wait()
+		}
+	}
 	if r.reqReaders > ms.maxReaders || !r.reserveRequestBytes() {
 		r.reqMu.Unlock()
 		return nil, OK
@@ -141,6 +152,10 @@ func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 		r.reqReaders--
 		return nil, EINVAL
 	}
+	if r.recentUnique != nil {
+		r.recentUnique = append(r.recentUnique, req.inHeader().Unique)
+	}
+	ms.addInflight(&req.request)
 	opCode := ((*InHeader)(unsafe.Pointer(&req.inputBuf[0]))).Opcode
 	/* These messages don't expect reply, so they cost nothing for
 	   the kernel to send. Make sure we're not overwhelmed by not
@@ -152,9 +167,10 @@ func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 		r.putReadBuf(dest)
 	}
 	r.reqReaders--
-	if !ms.singleReader && r.reqReaders <= 0 && !needsBackPressure {
+	if !ms.singleReader && r.reqReaders <= 0 && !needsBackPressure &&
+		(shutdown == nil || shutdown.phase != phaseStopReaders) {
 		r.loops.Add(1)
-		go ms.loop()
+		go ms.loop(true)
 	}
 
 	return req, OK
@@ -162,6 +178,8 @@ func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 
 // returnRequest returns a request to the pool of unused requests.
 func (r *fuseFD) returnRequest(req *requestAlloc) {
+	r.server.dropInflight(&req.request)
+
 	if req.bufferPoolOutputBuf != nil {
 		r.buffers.FreeBuffer(req.bufferPoolOutputBuf)
 		req.bufferPoolOutputBuf = nil

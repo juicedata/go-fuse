@@ -15,6 +15,8 @@ type protocolServer struct {
 
 	writev func([][]byte) (int, syscall.Errno)
 
+	shutdown *shutdownState
+
 	interruptMu    sync.Mutex
 	reqInflight    []*request
 	connectionDead bool
@@ -30,9 +32,6 @@ type protocolServer struct {
 }
 
 func (ms *protocolServer) handleRequest(h *operationHandler, req *request) {
-	ms.addInflight(req)
-	defer ms.dropInflight(req)
-
 	if req.status.Ok() && ms.opts.Debug {
 		ms.opts.Logger.Println(req.InputDebug())
 	}
@@ -251,6 +250,8 @@ func (ps *ProtocolServer) HandleRequest(in [][]byte, out [][]byte) (int, Status)
 	}
 
 	beforePayload := req.outPayload
+	ps.addInflight(&req)
+	defer ps.dropInflight(&req)
 	ps.protocolServer.handleRequest(h, &req)
 	if len(req.outPayload) > 0 && len(beforePayload) > 0 &&
 		&beforePayload[0] != &req.outPayload[0] {

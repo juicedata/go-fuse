@@ -7,6 +7,8 @@ import (
 	"unsafe"
 )
 
+const MSG_CMSG_CLOEXEC = 0
+
 func sys_writev(fd int, iovecs *syscall.Iovec, cnt int) (n int, err error) {
 	n1, _, e1 := syscall.Syscall(
 		syscall.SYS_WRITEV,

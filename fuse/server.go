@@ -260,22 +260,38 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
+	ms.mountPoint = mountPoint
+	adopted, err := ms.adoptRestartSession()
+	if err != nil {
+		return nil, err
+	}
+	if adopted {
+		ms.fuseFD.loops.Add(1)
+		return ms, nil
+	}
+
 	fd, err := mount(mountPoint, &o, ms.ready)
 	if err != nil {
 		return nil, err
 	}
 
-	ms.mountPoint = mountPoint
 	ms.fuseFD, err = ms.newFuseFD(fd)
 	if err != nil {
 		return nil, err
 	}
 	ms.protocolServer.writev = ms.fuseFD.writev
+	if o.FdCommSocket != "" {
+		ms.shutdown = newShutdownState(&ms.fuseFD.reqMu)
+	}
 
 	if code := ms.handleInit(); !code.Ok() {
 		ms.fuseFD.close()
 		// TODO - unmount as well?
 		return nil, fmt.Errorf("init: %s", code)
+	}
+	if err := ms.publishRestartSession(); err != nil {
+		ms.fuseFD.close()
+		return nil, err
 	}
 
 	// This prepares for Serve being called somewhere, either
@@ -377,9 +393,17 @@ func (ms *Server) Serve() {
 		// Catch it early.
 		log.Panic("Serve() must only be called once, you have called it a second time")
 	}
+	if ms.fuseFD.recentUnique != nil {
+		go ms.checkLostRequests()
+	}
 
-	ms.loop()
+	ms.loop(false)
 	ms.fuseFD.loops.Wait()
+	if path := ms.opts.FdCommSocket; path != "" {
+		if err := closeFuseFd(path); err != nil {
+			ms.opts.Logger.Printf("close published FUSE fd: %v", err)
+		}
+	}
 
 	ms.fuseFD.close()
 
@@ -414,7 +438,7 @@ func (ms *Server) handleInit() Status {
 	// and don't spawn new readers.
 	orig := ms.singleReader
 	ms.singleReader = true
-	req, errNo := ms.fuseFD.readRequest()
+	req, errNo := ms.fuseFD.readRequest(false)
 	ms.singleReader = orig
 
 	if errNo != OK || req == nil {
@@ -461,11 +485,11 @@ func (ms *Server) handleInit() Status {
 // BenchmarkGoFuseStat-2          	    9310	    121332 ns/op
 // BenchmarkGoFuseReaddir         	    4074	    361568 ns/op
 // BenchmarkGoFuseReaddir-2       	    3511	    319765 ns/op
-func (ms *Server) loop() {
+func (ms *Server) loop(exitIdle bool) {
 	defer ms.fuseFD.loops.Done()
 exit:
 	for {
-		req, errNo := ms.fuseFD.readRequest()
+		req, errNo := ms.fuseFD.readRequest(exitIdle)
 		switch errNo {
 		case OK:
 			if req == nil {
@@ -565,6 +589,15 @@ func (ms *protocolServer) notifyWrite(req *request) Status {
 	if ms.writev == nil {
 		return ENOSYS
 	}
+	if shutdown := ms.shutdown; shutdown != nil {
+		shutdown.mu.Lock()
+		stopped := shutdown.phase != phaseInactive
+		shutdown.mu.Unlock()
+		if stopped {
+			return EINTR
+		}
+	}
+
 	errno := notifyWrite(ms.writev, ms.opts, req)
 	return Status(errno)
 }

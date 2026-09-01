@@ -160,6 +160,16 @@ type MountOptions struct {
 	// Options are the options passed as -o string to fusermount.
 	Options []string
 
+	// FdCommSocket is a Unix domain socket used to adopt or publish a FUSE
+	// session during a process restart. Empty means mounting a new session
+	// without restart support.
+	FdCommSocket string
+
+	// CleanRestart indicates that the caller successfully restored business
+	// state saved after the previous Server completed Shutdown. It skips lost
+	// request recovery when adopting a FUSE session. The default is false.
+	CleanRestart bool
+
 	// MaxBackground controls the maximum number of allowed backgruond
 	// asynchronous I/O requests.
 	//
