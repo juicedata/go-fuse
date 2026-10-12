@@ -6,6 +6,7 @@ package fuse
 
 import (
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -15,6 +16,9 @@ type protocolServer struct {
 	fileSystem RawFileSystem
 
 	writev func([][]byte) (int, syscall.Errno)
+
+	// stopping makes notifications fail, see Server.Stop.
+	stopping atomic.Bool
 
 	interruptMu    sync.Mutex
 	reqInflight    []*request

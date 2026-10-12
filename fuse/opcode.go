@@ -87,74 +87,80 @@ const (
 ////////////////////////////////////////////////////////////////
 
 func doInit(server *protocolServer, req *request) {
-	input := (*InitIn)(req.inData())
-	if input.Major != _FUSE_KERNEL_VERSION {
-		log.Printf("Major versions does not match. Given %d, want %d\n", input.Major, _FUSE_KERNEL_VERSION)
+	out, err := server.negotiate((*InitIn)(req.inData()))
+	if err != nil {
+		log.Print(err)
 		req.status = EIO
 		return
 	}
+	*(*InitOut)(req.outData()) = out
+	req.status = OK
+}
+
+// negotiate computes the reply to the kernel's INIT request input, and
+// sets up the protocol state that depends on it.
+func (ms *protocolServer) negotiate(input *InitIn) (InitOut, error) {
+	if input.Major != _FUSE_KERNEL_VERSION {
+		return InitOut{}, fmt.Errorf("fuse: kernel major version %d, want %d", input.Major, _FUSE_KERNEL_VERSION)
+	}
 	if input.Minor < _MINIMUM_MINOR_VERSION {
-		log.Printf("Minor version is less than we support. Given %d, want at least %d\n", input.Minor, _MINIMUM_MINOR_VERSION)
-		req.status = EIO
-		return
+		return InitOut{}, fmt.Errorf("fuse: kernel minor version %d, want at least %d", input.Minor, _MINIMUM_MINOR_VERSION)
 	}
 
 	kernelFlags := input.Flags64()
-	server.kernelSettings = *input
+	ms.kernelSettings = *input
 	kernelFlags &= (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
 		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS | CAP_MAX_PAGES | CAP_RENAME_SWAP | CAP_PASSTHROUGH | CAP_ALLOW_IDMAP |
-		server.opts.ExtraCapabilities)
+		ms.opts.ExtraCapabilities)
 
-	if server.opts.EnableLocks {
+	if ms.opts.EnableLocks {
 		kernelFlags |= input.Flags64() & (CAP_FLOCK_LOCKS | CAP_POSIX_LOCKS)
 	}
-	if server.opts.EnableSymlinkCaching {
+	if ms.opts.EnableSymlinkCaching {
 		kernelFlags |= input.Flags64() & CAP_CACHE_SYMLINKS
 	}
-	if server.opts.EnableAcl {
+	if ms.opts.EnableAcl {
 		kernelFlags |= input.Flags64() & CAP_POSIX_ACL
 	}
 
-	if server.opts.ExplicitDataCacheControl {
+	if ms.opts.ExplicitDataCacheControl {
 		// we don't want CAP_AUTO_INVAL_DATA even if we cannot go into fully explicit mode
 		kernelFlags |= input.Flags64() & CAP_EXPLICIT_INVAL_DATA
 	} else {
 		kernelFlags |= input.Flags64() & CAP_AUTO_INVAL_DATA
 	}
 
-	kernelFlags = kernelFlags &^ server.opts.DisabledCapabilities
+	kernelFlags = kernelFlags &^ ms.opts.DisabledCapabilities
 
 	// maxPages is the maximum request size we want the kernel to use, in units of
 	// memory pages (usually 4kiB). Linux v4.19 and older ignore this and always use
 	// 128kiB.
-	maxPages := (server.opts.MaxWrite-1)/syscall.Getpagesize() + 1 // Round up
+	maxPages := (ms.opts.MaxWrite-1)/syscall.Getpagesize() + 1 // Round up
 
-	congestionThreshold := server.opts.CongestionThreshold
+	congestionThreshold := ms.opts.CongestionThreshold
 	if congestionThreshold <= 0 {
-		congestionThreshold = server.opts.MaxBackground * 3 / 4
+		congestionThreshold = ms.opts.MaxBackground * 3 / 4
 	}
 
-	out := (*InitOut)(req.outData())
-	*out = InitOut{
+	out := InitOut{
 		Major:               _FUSE_KERNEL_VERSION,
 		Minor:               _OUR_MINOR_VERSION,
 		MaxReadAhead:        input.MaxReadAhead,
-		MaxWrite:            uint32(server.opts.MaxWrite),
+		MaxWrite:            uint32(ms.opts.MaxWrite),
 		CongestionThreshold: uint16(congestionThreshold),
-		MaxBackground:       uint16(server.opts.MaxBackground),
+		MaxBackground:       uint16(ms.opts.MaxBackground),
 		MaxPages:            uint16(maxPages),
-		MaxStackDepth:       uint32(server.opts.MaxStackDepth),
+		MaxStackDepth:       uint32(ms.opts.MaxStackDepth),
 	}
 	out.setFlags(kernelFlags)
-	server.negotiatedFlags = out.Flags64()
-	if server.opts.MaxReadAhead != 0 && uint32(server.opts.MaxReadAhead) < out.MaxReadAhead {
-		out.MaxReadAhead = uint32(server.opts.MaxReadAhead)
+	ms.negotiatedFlags = out.Flags64()
+	if ms.opts.MaxReadAhead != 0 && uint32(ms.opts.MaxReadAhead) < out.MaxReadAhead {
+		out.MaxReadAhead = uint32(ms.opts.MaxReadAhead)
 	}
 	if out.Minor > input.Minor {
 		out.Minor = input.Minor
 	}
-
-	req.status = OK
+	return out, nil
 }
 
 func doOpen(server *protocolServer, req *request) {

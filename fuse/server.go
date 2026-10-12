@@ -65,6 +65,14 @@ type Server struct {
 	canSplice    bool
 	serving      atomic.Bool // for preventing duplicate Serve() calls
 
+	// lifecycleMu serializes Start, Stop and Shutdown.
+	lifecycleMu sync.Mutex
+
+	// done is closed once the connection is released; closeErr is
+	// valid after that.
+	done     chan struct{}
+	closeErr error
+
 	// Used to implement WaitMount on macos.
 	ready chan error
 
@@ -116,8 +124,8 @@ func (ms *Server) Unmount() (err error) {
 	if err != nil {
 		return
 	}
-	// Wait for event loops to exit.
-	ms.fuseFD.loops.Wait()
+	ms.teardown()
+	ms.Wait()
 	ms.mountPoint = ""
 	return err
 }
@@ -191,6 +199,58 @@ func defaultPanicHandler(logger *log.Logger, obj any) Status {
 // See the "Mount styles" section in the package documentation if you want to
 // know about the inner workings of the mount process. Usually you do not.
 func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server, error) {
+	ms, err := newServer(fs, mountPoint, opts)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := mount(ms.mountPoint, ms.opts, ms.ready)
+	if err != nil {
+		return nil, err
+	}
+	if err := ms.attach(fd); err != nil {
+		return nil, err
+	}
+	if code := ms.handleInit(); !code.Ok() {
+		ms.fuseFD.close()
+		return nil, fmt.Errorf("init: %s", code)
+	}
+	ms.finishInit()
+	return ms, nil
+}
+
+// NewServerWithFD creates a server for fuseFile, a FUSE connection
+// mounted at mountPoint that has negotiated INIT with the kernel
+// settings in. It duplicates fuseFile instead of mounting; the caller
+// keeps ownership of fuseFile.
+//
+// To take over the connection of another server, pass its FuseFile and
+// KernelSettings. The options that affect INIT, such as MaxWrite and
+// capabilities, must be the same, and fs must accept the node IDs and
+// file handles that the other server handed out.
+func NewServerWithFD(fs RawFileSystem, mountPoint string, fuseFile *os.File, in *InitIn, opts *MountOptions) (*Server, error) {
+	ms, err := newServer(fs, mountPoint, opts)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := dupFD(fuseFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := ms.attach(fd); err != nil {
+		return nil, err
+	}
+	if _, err := ms.negotiate(in); err != nil {
+		ms.fuseFD.close()
+		return nil, err
+	}
+	// Already mounted.
+	close(ms.ready)
+	ms.finishInit()
+	return ms, nil
+}
+
+// newServer returns a server for fs that is not connected yet.
+func newServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server, error) {
 	if opts == nil {
 		opts = &MountOptions{
 			MaxBackground: _DEFAULT_BACKGROUND_TASKS,
@@ -218,6 +278,7 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		maxReaders:   maxReaders,
 		singleReader: useSingleReader,
 		ready:        make(chan error, 1),
+		done:         make(chan struct{}),
 	}
 	ms.reqPool.New = func() any {
 		return &requestAlloc{
@@ -243,28 +304,28 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		}
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
-	fd, err := mount(mountPoint, &o, ms.ready)
-	if err != nil {
-		return nil, err
-	}
-
 	ms.mountPoint = mountPoint
+	return ms, nil
+}
+
+func (ms *Server) attach(fd int) error {
+	var err error
 	ms.fuseFD, err = ms.newFuseFD(fd)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ms.protocolServer.writev = ms.fuseFD.writev
+	return nil
+}
 
-	if code := ms.handleInit(); !code.Ok() {
-		ms.fuseFD.close()
-		// TODO - unmount as well?
-		return nil, fmt.Errorf("init: %s", code)
+// finishInit sets up what depends on the INIT settings, and leaves the
+// server stopped.
+func (ms *Server) finishInit() {
+	if ms.kernelSettings.Minor >= 13 {
+		ms.setSplice()
 	}
-
-	// This prepares for Serve being called somewhere, either
-	// synchronously or asynchronously.
-	ms.fuseFD.loops.Add(1)
-	return ms, nil
+	ms.fileSystem.Init(ms)
+	ms.fuseFD.state = fuseFDStopped
 }
 
 func requestAccountingSizes(maxWrite int) (readBufSize, readBufBytes, reqAllocBytes int) {
@@ -348,9 +409,7 @@ func handleEINTR(fn func() error) (err error) {
 	return
 }
 
-// Serve initiates the FUSE loop. Normally, callers should run Serve()
-// and wait for it to exit, but tests will want to run this in a
-// goroutine.
+// Serve starts serving requests and waits for the connection to close.
 //
 // Each filesystem operation executes in a separate goroutine.
 func (ms *Server) Serve() {
@@ -361,35 +420,16 @@ func (ms *Server) Serve() {
 		log.Panic("Serve() must only be called once, you have called it a second time")
 	}
 
-	ms.loop()
-	ms.fuseFD.loops.Wait()
-
-	ms.fuseFD.close()
-
-	// shutdown in-flight cache retrieves.
-	//
-	// It is possible that umount comes in the middle - after retrieve
-	// request was sent to kernel, but corresponding kernel reply has not
-	// yet been read. We unblock all such readers and wake them up with ENODEV.
-	ms.retrieveMu.Lock()
-	rtab := ms.retrieveTab
-	// retrieve attempts might be erroneously tried even after close
-	// we have to keep retrieveTab !nil not to panic.
-	ms.retrieveTab = make(map[uint64]*retrieveCacheRequest)
-	ms.retrieveMu.Unlock()
-	for _, reading := range rtab {
-		reading.n = 0
-		reading.st = ENODEV
-		close(reading.ready)
-	}
-
-	ms.fileSystem.OnUnmount()
+	// Start fails only once the server is closing, and then Wait returns.
+	ms.Start()
+	ms.Wait()
 }
 
-// Wait waits for the serve loop to exit. This should only be called
-// after Serve has been called, or it will hang indefinitely.
+// Wait waits until the server has released the connection, after
+// unmount, Shutdown or a fatal read error. Stop alone does not make
+// Wait return.
 func (ms *Server) Wait() {
-	ms.fuseFD.loops.Wait()
+	<-ms.done
 }
 
 func (ms *Server) handleInit() Status {
@@ -403,18 +443,7 @@ func (ms *Server) handleInit() Status {
 	if errNo != OK || req == nil {
 		return errNo
 	}
-	if code := ms.handleRequest(req); !code.Ok() {
-		return code
-	}
-
-	if ms.kernelSettings.Minor >= 13 {
-		ms.setSplice()
-	}
-
-	// INIT is handled. Init the file system, but don't accept
-	// incoming requests, so the file system can setup itself.
-	ms.fileSystem.Init(ms)
-	return OK
+	return ms.handleRequest(req)
 }
 
 // loop is the FUSE event loop. The simplistic way of calling this is
@@ -461,12 +490,14 @@ exit:
 			// cancel outstanding requests is at the end
 			// of Serve, but that reader might be blocked.
 			ms.cancelAll()
+			ms.teardown()
 			if ms.opts.Debug {
 				ms.opts.Logger.Printf("received ENODEV (unmount request), thread exiting")
 			}
 			break exit
 		default: // some other error?
 			ms.opts.Logger.Printf("Failed to read from fuse conn: %v", errNo)
+			ms.teardown()
 			break exit
 		}
 
@@ -551,6 +582,11 @@ func notifyWrite(writev func([][]byte) (int, syscall.Errno), opts *MountOptions,
 func (ms *protocolServer) notifyWrite(req *request) Status {
 	if ms.writev == nil {
 		return ENOSYS
+	}
+	// A stopped server reads no NOTIFY_REPLY, and invalidations may
+	// block on locks held by requests it no longer serves.
+	if ms.stopping.Load() {
+		return EINTR
 	}
 	errno := notifyWrite(ms.writev, ms.opts, req)
 	return Status(errno)

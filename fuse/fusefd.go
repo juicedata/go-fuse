@@ -12,6 +12,14 @@ import (
 	"unsafe"
 )
 
+type fuseFDState uint8
+
+const (
+	fuseFDRunning fuseFDState = iota // Reading requests; NewServer reads INIT in this state.
+	fuseFDStopped
+	fuseFDClosing
+)
+
 // fuseFD owns the per-FUSE-fd state: the fd itself, the read-side
 // bookkeeping (reqReaders, inflightRequestBytes), and the WaitGroup
 // tracking reader goroutines on this fd. The pools are shared with the
@@ -34,6 +42,8 @@ type fuseFD struct {
 	reqMu                sync.Mutex
 	reqReaders           int
 	inflightRequestBytes int
+
+	state fuseFDState
 
 	// loops tracks reader goroutines servicing fd.
 	loops sync.WaitGroup
@@ -97,12 +107,12 @@ func (r *fuseFD) writevFD(iov [][]byte) (int, error) {
 }
 
 // readRequest reads one request from the kernel. Returns nil, OK if
-// there are too many concurrent readers or insufficient request-bytes
-// budget.
+// the fd is not running, there are too many concurrent readers or
+// insufficient request-bytes budget.
 func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 	ms := r.server
 	r.reqMu.Lock()
-	if r.reqReaders > ms.maxReaders || !r.reserveRequestBytes() {
+	if r.state != fuseFDRunning || r.reqReaders > ms.maxReaders || !r.reserveRequestBytes() {
 		r.reqMu.Unlock()
 		return nil, OK
 	}
@@ -152,7 +162,7 @@ func (r *fuseFD) readRequest() (req *requestAlloc, code Status) {
 		r.putReadBuf(dest)
 	}
 	r.reqReaders--
-	if !ms.singleReader && r.reqReaders <= 0 && !needsBackPressure {
+	if !ms.singleReader && r.reqReaders <= 0 && !needsBackPressure && r.state == fuseFDRunning {
 		r.loops.Add(1)
 		go ms.loop()
 	}
