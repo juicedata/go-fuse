@@ -695,3 +695,9 @@ func (lk *FileLock) FromFlockT(flockT *syscall.Flock_t) {
 	}
 	lk.Pid = uint32(flockT.Pid)
 }
+
+// FUSE io_uring extends the INIT capability mask into Flags2.
+const (
+	_CAP_OVER_IO_URING_FLAGS2 uint32 = 1 << 9
+	_IO_URING_MINOR_VERSION          = 42
+)

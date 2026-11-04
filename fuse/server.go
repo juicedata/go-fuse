@@ -43,6 +43,9 @@ const (
 // Server contains the logic for reading from the FUSE device and
 // translating it to RawFileSystem interface calls.
 type Server struct {
+	uringQueues   []*uringQueue
+	uringStopOnce sync.Once
+
 	// Empty if unmounted.
 	mountPoint string
 	fileSystem RawFileSystem
@@ -237,9 +240,13 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 		mountPoint = filepath.Clean(filepath.Join(cwd, mountPoint))
 	}
 	ms.mountPoint = mountPoint
+	if err := ms.prepareUring(); err != nil {
+		return nil, err
+	}
 
 	err := ms.mount(&o)
 	if err != nil {
+		ms.closeUring()
 		log.Printf("mount: %s", err)
 		return nil, err
 	}
@@ -251,6 +258,9 @@ func NewServer(fs RawFileSystem, mountPoint string, opts *MountOptions) (*Server
 
 func (ms *Server) mount(opt *MountOptions) error {
 	path := os.Getenv("_FUSE_FD_COMM")
+	if ms.opts.EnableIoUring {
+		path = "" // Ring buffers cannot be transferred with the FUSE fd.
+	}
 	if path != "" {
 		c, err := net.Dial("unix", path)
 		if err != nil {
@@ -295,8 +305,16 @@ func (ms *Server) mount(opt *MountOptions) error {
 
 	if code := ms.handleInit(); !code.Ok() {
 		syscall.Close(fd)
-		// TODO - unmount as well?
+		_ = unmount(ms.mountPoint, opt)
 		return fmt.Errorf("init: %s", code)
+	}
+
+	if err := ms.startUring(); err != nil {
+		ms.stopUring()
+		ms.loops.Wait()
+		syscall.Close(fd)
+		_ = unmount(ms.mountPoint, opt)
+		return err
 	}
 
 	if path != "" {
@@ -616,7 +634,9 @@ func (ms *Server) Serve() {
 		go ms.checkRequestTimeout(ms.opts.Timeout)
 	}
 	ms.loop(false)
+	ms.stopUring()
 	ms.loops.Wait()
+	ms.closeUring()
 
 	// shutdown in-flight cache retrieves.
 	//
@@ -683,16 +703,16 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 				req := ms.reqInflight[i+j]
 				used := now.Sub(req.startTime)
 				opcode := req.inHeader.Opcode
-				if req.interrupted && used > timeout/10 {
+				if req.interrupted && req.uringReply == nil && used > timeout/10 {
 					unique := req.inHeader.Unique
 					ms.reqMu.Unlock()
 					ms.returnInterrupted(unique)
 					ms.reqMu.Lock()
-				} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || req.inHeader.Unique+5.5e6 < ms.maxUnique) {
+				} else if !req.interrupted && opcode != _OP_SETLKW && (used > timeout || (req.uringReply == nil && req.inHeader.Unique+5.5e6 < ms.maxUnique)) {
 					log.Printf("interrupt request %d(max: %d) after %s(timeout: %s): %+v", req.inHeader.Unique, ms.maxUnique, used, timeout, req.inHeader)
 					req.interrupted = true
 					close(req.cancel)
-					if req.inHeader.Unique+5.5e6 < ms.maxUnique {
+					if req.uringReply == nil && req.inHeader.Unique+5.5e6 < ms.maxUnique {
 						ms.maxUnique = req.inHeader.Unique
 					}
 				}
@@ -703,6 +723,10 @@ func (ms *Server) checkRequestTimeout(timeout time.Duration) {
 }
 
 func (ms *Server) Shutdown() bool {
+	if ms.opts.EnableIoUring {
+		ms.opts.Logger.Print("FUSE io_uring does not support fd handover; unmount and remount to restart")
+		return false
+	}
 	log.Printf("try to restart gracefully")
 	start := time.Now()
 	ms.reqMu.Lock()
@@ -833,7 +857,12 @@ func (ms *Server) handleRequest(req *request) Status {
 		req.handler.Func(ms, req)
 	}
 
-	errNo := ms.write(req)
+	var errNo Status
+	if req.uringReply != nil {
+		errNo = req.uringReply(req)
+	} else {
+		errNo = ms.write(req)
+	}
 	if errNo != 0 {
 		// Ignore ENOENT for INTERRUPT responses which
 		// indicates that the referred request is no longer

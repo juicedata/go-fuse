@@ -99,6 +99,10 @@ func doInit(server *Server, req *request) {
 		return
 	}
 
+	if server.opts.EnableIoUring && (input.Minor < _IO_URING_MINOR_VERSION || input.Flags&CAP_INIT_EXT == 0 || input.Flags2&_CAP_OVER_IO_URING_FLAGS2 == 0) {
+		req.status = Status(syscall.EOPNOTSUPP)
+		return
+	}
 	server.reqMu.Lock()
 	server.kernelSettings = *input
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
@@ -128,9 +132,14 @@ func doInit(server *Server, req *request) {
 		server.kernelSettings.Flags |= CAP_READDIRPLUS_AUTO
 	}
 	server.kernelSettings.Flags2 = 0
+	if server.opts.EnableIoUring {
+		server.kernelSettings.Flags2 |= _CAP_OVER_IO_URING_FLAGS2
+	}
 	if server.opts.IDMappedMount && input.Flags&CAP_INIT_EXT != 0 && input.Flags2&(CAP_ALLOW_IDMAP>>32) != 0 {
+		server.kernelSettings.Flags2 |= CAP_ALLOW_IDMAP >> 32
+	}
+	if server.kernelSettings.Flags2 != 0 {
 		server.kernelSettings.Flags |= CAP_INIT_EXT
-		server.kernelSettings.Flags2 = CAP_ALLOW_IDMAP >> 32
 	}
 
 	if server.opts.EnableWriteback {
@@ -174,6 +183,9 @@ func doInit(server *Server, req *request) {
 
 	if server.opts.MaxReadAhead != 0 && uint32(server.opts.MaxReadAhead) < out.MaxReadAhead {
 		out.MaxReadAhead = uint32(server.opts.MaxReadAhead)
+	}
+	if server.opts.EnableIoUring {
+		out.Minor = _IO_URING_MINOR_VERSION
 	}
 	if out.Minor > input.Minor {
 		out.Minor = input.Minor
@@ -413,6 +425,24 @@ type withSlice interface {
 
 func doRead(server *Server, req *request) {
 	in := (*ReadIn)(req.inData)
+	if req.uringOutput != nil {
+		if reader, ok := server.fileSystem.(ReadIntoFileSystem); ok {
+			if uint64(in.Size) > uint64(len(req.uringOutput)) {
+				req.status = EIO
+				return
+			}
+			n, status := reader.ReadInto(req.cancel, in, req.uringOutput[:in.Size])
+			req.status = status
+			if status.Ok() {
+				if n > in.Size {
+					req.status = EIO
+				} else {
+					req.flatData = req.uringOutput[:n]
+				}
+			}
+			return
+		}
+	}
 	var buf []byte
 	if !server.opts.NoAllocForRead {
 		buf = server.allocOut(req, in.Size)

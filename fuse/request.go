@@ -18,6 +18,9 @@ var sizeOfOutHeader = unsafe.Sizeof(OutHeader{})
 var zeroOutBuf [outputHeaderSize]byte
 
 type request struct {
+	uringReply  func(*request) Status
+	uringOutput []byte // external mmap; never returned to the buffer pool
+
 	inflightIndex int
 
 	cancel chan struct{}
@@ -66,6 +69,8 @@ type request struct {
 }
 
 func (r *request) clear() {
+	r.uringReply = nil
+	r.uringOutput = nil
 	r.inputBuf = nil
 	r.inHeader = nil
 	r.inData = nil
