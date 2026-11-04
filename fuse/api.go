@@ -307,6 +307,12 @@ type MountOptions struct {
 
 	// max duration for a request
 	Timeout time.Duration
+	// EnableIoUring enables experimental Linux FUSE-over-io_uring transport.
+	EnableIoUring bool
+	// IoUringQueueDepth is the number of entries per possible CPU (default 4).
+	IoUringQueueDepth int
+	// IoUringRings controls the number of shared rings (0 selects up to 4).
+	IoUringRings int
 }
 
 // RawFileSystem is an interface close to the FUSE wire protocol.
@@ -422,4 +428,11 @@ type RawFileSystem interface {
 	// filesystem implementation can use the server argument to
 	// talk back to the kernel (through notify methods).
 	Init(*Server)
+}
+
+// ReadIntoFileSystem optionally fills an io_uring-owned reply buffer directly.
+// The implementation must not retain buf, or allow workers to use it, after
+// returning, including when cancelled. Other transports still call Read.
+type ReadIntoFileSystem interface {
+	ReadInto(cancel <-chan struct{}, input *ReadIn, buf []byte) (uint32, Status)
 }

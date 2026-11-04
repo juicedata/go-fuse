@@ -99,10 +99,22 @@ func doInit(server *Server, req *request) {
 		return
 	}
 
+	if server.opts.EnableIoUring && (input.Minor < _IO_URING_MINOR_VERSION || input.Flags&_CAP_INIT_EXT == 0 || input.Flags2&_CAP_OVER_IO_URING_FLAGS2 == 0) {
+		req.status = Status(syscall.EOPNOTSUPP)
+		return
+	}
 	server.reqMu.Lock()
 	server.kernelSettings = *input
+	server.kernelSettings.Flags2 = 0
+	if server.opts.EnableIoUring {
+		server.kernelSettings.Flags2 = _CAP_OVER_IO_URING_FLAGS2
+	}
 	server.kernelSettings.Flags = input.Flags & (CAP_ASYNC_READ | CAP_BIG_WRITES | CAP_FILE_OPS |
 		CAP_READDIRPLUS | CAP_NO_OPEN_SUPPORT | CAP_PARALLEL_DIROPS | CAP_MAX_PAGES | CAP_RENAME_SWAP | CAP_EXPORT_SUPPORT | server.opts.OtherCaps)
+
+	if server.opts.EnableIoUring {
+		server.kernelSettings.Flags |= _CAP_INIT_EXT
+	}
 
 	if server.opts.DontUmask {
 		server.kernelSettings.Flags |= CAP_DONT_MASK
@@ -160,6 +172,7 @@ func doInit(server *Server, req *request) {
 		Minor:               _OUR_MINOR_VERSION,
 		MaxReadAhead:        input.MaxReadAhead,
 		Flags:               server.kernelSettings.Flags,
+		Flags2:              server.kernelSettings.Flags2,
 		MaxWrite:            uint32(server.opts.MaxWrite),
 		CongestionThreshold: uint16(server.opts.MaxBackground * 3 / 4),
 		MaxBackground:       uint16(server.opts.MaxBackground),
@@ -168,6 +181,9 @@ func doInit(server *Server, req *request) {
 
 	if server.opts.MaxReadAhead != 0 && uint32(server.opts.MaxReadAhead) < out.MaxReadAhead {
 		out.MaxReadAhead = uint32(server.opts.MaxReadAhead)
+	}
+	if server.opts.EnableIoUring {
+		out.Minor = _IO_URING_MINOR_VERSION
 	}
 	if out.Minor > input.Minor {
 		out.Minor = input.Minor
@@ -407,6 +423,24 @@ type withSlice interface {
 
 func doRead(server *Server, req *request) {
 	in := (*ReadIn)(req.inData)
+	if req.uringOutput != nil {
+		if reader, ok := server.fileSystem.(ReadIntoFileSystem); ok {
+			if uint64(in.Size) > uint64(len(req.uringOutput)) {
+				req.status = EIO
+				return
+			}
+			n, status := reader.ReadInto(req.cancel, in, req.uringOutput[:in.Size])
+			req.status = status
+			if status.Ok() {
+				if n > in.Size {
+					req.status = EIO
+				} else {
+					req.flatData = req.uringOutput[:n]
+				}
+			}
+			return
+		}
+	}
 	var buf []byte
 	if !server.opts.NoAllocForRead {
 		buf = server.allocOut(req, in.Size)
