@@ -12,27 +12,20 @@ import (
 // bufferPool implements explicit memory management. It is used for
 // minimizing the GC overhead of communicating with the kernel.
 type bufferPool struct {
-	lock sync.Mutex
-
 	// For each page size multiple a list of slice pointers.
-	buffersBySize []*sync.Pool
+	buffersBySize sync.Map
 }
 
 var pageSize = os.Getpagesize()
 
 func (p *bufferPool) getPool(pageCount int) *sync.Pool {
-	p.lock.Lock()
-	for len(p.buffersBySize) < pageCount+1 {
-		p.buffersBySize = append(p.buffersBySize, nil)
+	if pool_, ok := p.buffersBySize.Load(pageCount); ok {
+		return pool_.(*sync.Pool)
 	}
-	if p.buffersBySize[pageCount] == nil {
-		p.buffersBySize[pageCount] = &sync.Pool{
-			New: func() interface{} { return make([]byte, pageSize*pageCount) },
-		}
-	}
-	pool := p.buffersBySize[pageCount]
-	p.lock.Unlock()
-	return pool
+	pool_, _ := p.buffersBySize.LoadOrStore(pageCount, &sync.Pool{
+		New: func() interface{} { return make([]byte, pageSize*pageCount) },
+	})
+	return pool_.(*sync.Pool)
 }
 
 // AllocBuffer creates a buffer of at least the given size. After use,
